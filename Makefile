@@ -91,3 +91,7 @@ clean:
 	rm -rf $(BACKEND)/.venv $(FRONTEND)/node_modules $(FRONTEND)/dist
 	find $(BACKEND) -type d -name __pycache__ -prune -exec rm -rf {} +
 	find $(BACKEND) -type f -name '*.pyc' -delete
+
+.PHONY: verify-polar
+verify-polar:  ## Validate Polar creds in backend/.env (90s, green = demo-ready)
+	@bash scripts/verify-polar.sh
