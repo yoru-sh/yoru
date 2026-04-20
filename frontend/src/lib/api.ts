@@ -6,7 +6,6 @@ import type {
   Summary,
 } from "../types/receipt"
 import { mockListSessions, mockGetSession, mockGetSummary } from "../mocks/sessions"
-import { toast } from "../components/Toaster"
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === "1"
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8002/api/v1"
@@ -86,20 +85,6 @@ function qs(f: Filters): string {
   return p.toString()
 }
 
-// Server-side failures (5xx + network unreachable) toast; client errors (4xx)
-// don't — those are routed by existing banner state. 401 is handled upstream
-// by apiFetch's signOut latch.
-function notifyServerError(err: unknown): void {
-  if (err instanceof ApiError) {
-    if (err.status >= 500 && err.status < 600) {
-      toast.error("Couldn't load sessions", err.message)
-    }
-    return
-  }
-  const detail = err instanceof Error ? err.message : String(err)
-  toast.error("Couldn't load sessions", detail)
-}
-
 // Backend returns `user`/`tools_count`/`ended_at` — frontend types use
 // `user_email`/`tool_count`/`duration_ms`. Map on the way out.
 interface RawSession {
@@ -131,17 +116,12 @@ function mapSession(r: RawSession): import("../types/receipt").Session {
 
 export async function listSessions(filters: Filters): Promise<SessionList> {
   if (USE_MOCKS) return mockListSessions(filters)
-  try {
-    const raw = await apiFetch<{ items: RawSession[]; total?: number }>(
-      `/sessions${qs(filters) ? `?${qs(filters)}` : ""}`,
-    )
-    return {
-      items: (raw.items ?? []).map(mapSession),
-      total: raw.total ?? (raw.items ?? []).length,
-    }
-  } catch (err) {
-    notifyServerError(err)
-    throw err
+  const raw = await apiFetch<{ items: RawSession[]; total?: number }>(
+    `/sessions${qs(filters) ? `?${qs(filters)}` : ""}`,
+  )
+  return {
+    items: (raw.items ?? []).map(mapSession),
+    total: raw.total ?? (raw.items ?? []).length,
   }
 }
 
@@ -179,37 +159,32 @@ function mapEventType(kind: string): import("../types/receipt").EventType {
 
 export async function getSession(id: string): Promise<SessionDetail> {
   if (USE_MOCKS) return mockGetSession(id)
-  try {
-    const raw = await apiFetch<RawSessionDetail>(`/sessions/${id}`)
-    const base = mapSession(raw)
-    return {
-      ...base,
-      events: (raw.events ?? [])
-        // Filter out session_start/session_end — they are frame markers,
-        // not user-visible timeline events.
-        .filter((e) => e.kind !== "session_start" && e.kind !== "session_end")
-        .map((e) => ({
-          id: String(e.id),
-          session_id: raw.id,
-          at: e.ts,
-          type: mapEventType(e.kind),
-          tool_name: e.tool ?? undefined,
-          file_path: e.path ?? undefined,
-          text: e.content ?? undefined,
-          output: e.output ?? undefined,
-          flag: (e.flags && e.flags[0]) as import("../types/receipt").RedFlagKind | undefined,
-        })),
-      files_changed: (raw.files_changed ?? []).map((f) => ({
-        path: f.path,
-        op: (f.op ?? "edit") as import("../types/receipt").FileOp,
-        additions: f.additions ?? 0,
-        deletions: f.deletions ?? 0,
+  const raw = await apiFetch<RawSessionDetail>(`/sessions/${id}`)
+  const base = mapSession(raw)
+  return {
+    ...base,
+    events: (raw.events ?? [])
+      // Filter out session_start/session_end — they are frame markers,
+      // not user-visible timeline events.
+      .filter((e) => e.kind !== "session_start" && e.kind !== "session_end")
+      .map((e) => ({
+        id: String(e.id),
+        session_id: raw.id,
+        at: e.ts,
+        type: mapEventType(e.kind),
+        tool_name: e.tool ?? undefined,
+        file_path: e.path ?? undefined,
+        text: e.content ?? undefined,
+        output: e.output ?? undefined,
+        flag: (e.flags && e.flags[0]) as import("../types/receipt").RedFlagKind | undefined,
       })),
-      summary: raw.summary ?? null,
-    }
-  } catch (err) {
-    notifyServerError(err)
-    throw err
+    files_changed: (raw.files_changed ?? []).map((f) => ({
+      path: f.path,
+      op: (f.op ?? "edit") as import("../types/receipt").FileOp,
+      additions: f.additions ?? 0,
+      deletions: f.deletions ?? 0,
+    })),
+    summary: raw.summary ?? null,
   }
 }
 
@@ -220,12 +195,7 @@ export async function postSummary(id: string): Promise<Summary> {
 
 export async function getSummary(id: string): Promise<Summary> {
   if (USE_MOCKS) return mockGetSummary(id)
-  try {
-    return await apiFetch<Summary>(`/sessions/${id}/summary`)
-  } catch (err) {
-    notifyServerError(err)
-    throw err
-  }
+  return apiFetch<Summary>(`/sessions/${id}/summary`)
 }
 
 // Billing — mirror of C1 backend shapes (BILLING-PLANS-V1.md §3).
