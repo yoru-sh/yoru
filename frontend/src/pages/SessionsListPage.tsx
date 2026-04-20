@@ -6,7 +6,17 @@ import { SessionsTable } from "../features/sessions/SessionsTable"
 import { Skeleton } from "../components/ui/Skeleton"
 import type { SessionList } from "../types/receipt"
 
-const RUBRIC = "font-mono text-caption uppercase tracking-wider text-ink-faint"
+const RUBRIC =
+  "mt-1 font-mono text-caption uppercase tracking-wider text-ink-faint tabular-nums"
+
+// Events are the sum of per-session tool calls — backend Session shape has no
+// top-level event_count, and tool_call is the dominant event kind in practice.
+function rubricFor(list: SessionList | undefined): string {
+  if (!list) return "— sessions · — events"
+  const sessions = list.total
+  const events = list.items.reduce((n, s) => n + s.tool_count, 0)
+  return `${sessions} ${sessions === 1 ? "session" : "sessions"} · ${events} ${events === 1 ? "event" : "events"}`
+}
 
 export function SessionsListPage() {
   const filters = useFilters()
@@ -17,26 +27,11 @@ export function SessionsListPage() {
     queryFn: () => listSessions(filters),
   })
 
-  const total = query.data?.total
-  const countLabel = total === undefined ? "—" : String(total)
-  const entriesLabel = total === 1 ? "entry" : "entries"
-
   return (
     <div className="space-y-4">
-      <header className="rounded-sm border border-rule bg-surface">
-        <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-dashed border-rule px-4 py-2">
-          <p className={RUBRIC}>RECEIPT · INDEX</p>
-          <p className={`${RUBRIC} tabular-nums`}>
-            {countLabel} {entriesLabel}
-          </p>
-        </div>
-        <div className="px-4 py-3">
-          <h1 className="font-mono text-2xl font-semibold text-ink">
-            <span className="text-ink-muted">§</span> Sessions{" "}
-            <span className="text-ink-faint">·</span>{" "}
-            <span className="tabular-nums">{countLabel}</span>
-          </h1>
-        </div>
+      <header className="border-b border-dashed border-rule pb-4">
+        <h1 className="font-mono text-2xl font-semibold text-ink">Receipts</h1>
+        <p className={RUBRIC}>{rubricFor(query.data)}</p>
       </header>
 
       <FilterBar />
