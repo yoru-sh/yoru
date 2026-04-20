@@ -6,8 +6,8 @@ behavior is identical under uvicorn, pytest, and Docker.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -30,9 +30,11 @@ engine = create_engine(
 
 def init_db() -> None:
     """Create tables if absent. Safe to call repeatedly (idempotent)."""
-    from . import models  # noqa: F401 — registers SQLModel tables
-    from apps.api.api.routers.billing import models as billing_models  # noqa: F401
     from apps.api.api.models import webhooks as webhook_models  # noqa: F401
+    from apps.api.api.routers.billing import models as billing_models  # noqa: F401
+
+    from . import models  # noqa: F401 — registers SQLModel tables
+    from .auth_sessions_model import AuthSession as _AS  # noqa: F401
     SQLModel.metadata.create_all(engine)
 
 
