@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}You've been invited to {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h2>You've been invited!</h2>
+
+<p>Hi there,</p>
+
+<p>
+    <strong>{{ inviter_name }}</strong>
+    {% if inviter_email %}
+    ({{ inviter_email }})
+    {% endif %}
+    has invited you to join <strong>{{ brand_name }}</strong>.
+</p>
+
+{% if message %}
+<div class="info-box">
+    <p><strong>Personal message:</strong></p>
+    <p>{{ message }}</p>
+</div>
+{% endif %}
+
+<p>Click the button below to accept the invitation and create your account:</p>
+
+<a href="{{ invite_url }}" class="button">Accept Invitation</a>
+
+<p style="font-size: 14px; color: #6b7280;">
+    Or copy and paste this link into your browser:<br>
+    <a href="{{ invite_url }}" style="color: #4F46E5;">{{ invite_url }}</a>
+</p>
+
+{% if expires_at %}
+<div class="info-box">
+    <p><strong>Note:</strong> This invitation expires on {{ expires_at }}.</p>
+</div>
+{% endif %}
+
+<p>We're excited to have you join us!</p>
+{% endblock %}

@@ -1,0 +1,1139 @@
+---
+description: Règles Docker consolidées pour backend SaaS - référence unique et exhaustive
+alwaysApply: true
+globs:
+  - "**/Dockerfile*"
+  - "**/*docker-compose*.yml"
+  - "docker/**/*.yml"
+  - ".dockerignore"
+---
+
+# Règles Docker Consolidées
+
+## Contexte
+
+**Cible** : Backend SaaS Python conteneurisé  
+**Audience** : DevOps et développeurs  
+**Application** : Contrat non négociable  
+**Portée** : Agnostique au domaine métier
+
+**Sources** : Règles extraites et consolidées depuis analyses de projets réels (voir `docs/docker/` pour exemples et anti-patterns détectés)
+
+**Note importante** : Ces règles représentent l'état cible pour tout backend SaaS Python. Les analyses dans `docs/docker/` montrent des dettes techniques courantes à éviter - elles servent d'exemples de ce qu'il ne faut pas faire.
+
+---
+
+## 🔴 Règles BLOCKING - Dockerfile
+
+### BLOC-D-001 : Image de base Python slim uniquement
+
+**Règle** : Utiliser exclusivement `python:X.XX-slim`. Jamais `alpine` (incompatibilités ML), jamais version full (trop lourde).
+
+```dockerfile
+# ✓ FAIRE
+FROM python:3.11-slim
+FROM python:3.12-slim
+
+# ✓ ACCEPTABLE - Image interne basée sur slim
+FROM myorg/python-base:2.1.0
+
+# ✗ INTERDIT
+FROM python:3.11-alpine  # Incompatibilités packages ML (numpy, scipy)
+FROM python:3.11         # Version full trop lourde (>1GB vs 300MB)
+FROM ubuntu:22.04        # Pas d'image custom depuis scratch
+FROM python:latest       # Version non épinglée
+```
+
+**Détection** : `grep "FROM python" Dockerfile | grep -v "slim"`
+
+**Rationnelle** :
+- Alpine : problèmes compilation packages ML (musl vs glibc)
+- Full : contient packages inutiles (docs, locales, etc.)
+- Slim : équilibre optimal taille/compatibilité (150-200MB base)
+
+---
+
+### BLOC-D-002 : Multi-stage builds obligatoires
+
+**Règle** : Séparer dépendances build et runtime. Stage final doit être minimal.
+
+```dockerfile
+# ✓ FAIRE
+FROM python:3.11-slim AS base-system
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential
+
+FROM python:3.11-slim AS ml-deps
+COPY --from=base-system /usr/local /usr/local
+RUN pip install --no-cache-dir torch transformers
+
+FROM python:3.11-slim AS final
+COPY --from=ml-deps /usr/local/lib/python3.11 /usr/local/lib/python3.11
+COPY app /app/app
+USER appuser
+CMD ["uvicorn", "app.main:app"]
+
+# ✗ INTERDIT
+FROM python:3.11-slim
+RUN apt-get install build-essential  # Reste dans image finale
+RUN pip install torch transformers
+COPY app /app/app
+```
+
+**Stages standards** : base-system → ml-deps → ocr-deps → app-deps → final
+
+**Détection** : `grep -c "^FROM" Dockerfile` doit être > 1
+
+**⚠️ DETTE TECHNIQUE FRÉQUENTE** : Multi-stage souvent omis, résultant en images monolithiques 3-4GB (au lieu de <1GB).
+
+**Impact si non respecté** :
+- Images lourdes (3-4GB vs 800MB-1.2GB avec multi-stage)
+- Pull/push lents
+- Build tools inutiles en runtime (gcc, make, etc.)
+- Surface d'attaque élevée
+- Storage coûteux
+
+**Quand obligatoire** :
+- Dépendances ML/AI (torch, tensorflow)
+- Compilation packages C (pillow, numpy avec optimisations)
+- Build assets frontend dans image backend
+
+---
+
+### BLOC-D-003 : User non-root obligatoire
+
+**Règle** : Créer et utiliser user non-root. Jamais exécuter as root.
+
+```dockerfile
+# ✓ FAIRE
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+COPY --chown=appuser:appuser app /app/app
+RUN chown -R appuser:appuser /app
+USER appuser
+
+# ✗ INTERDIT
+# Pas de USER → container run as root (sécurité critique)
+```
+
+**Détection** : `! grep "^USER" Dockerfile`
+
+**⚠️ DETTE CRITIQUE COMMUNE** : Cette règle est **fréquemment violée** dans les projets réels (observé dans plusieurs analyses). Containers run as root = risque sécurité majeur.
+
+**Impact si non respecté** :
+- Escalation privilèges facile en cas de breach
+- Non-conformité audit sécurité
+- Risque modification filesystem host si volume bindé
+
+**Effort correction** : 2h par Dockerfile (création user + permissions)
+
+---
+
+### BLOC-D-004 : WORKDIR /app standard
+
+**Règle** : Toujours `/app`, jamais `/code`, `/src`, ou autre.
+
+```dockerfile
+# ✓ FAIRE
+WORKDIR /app
+
+# ✗ INTERDIT
+WORKDIR /code
+WORKDIR /src
+WORKDIR /opt/application
+```
+
+---
+
+### BLOC-D-005 : Nettoyage APT systématique
+
+**Règle** : Toujours nettoyer cache APT après installation.
+
+```dockerfile
+# ✓ FAIRE
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# ✗ INTERDIT
+RUN apt-get update && apt-get install -y curl  # Cache non nettoyé
+```
+
+---
+
+### BLOC-D-006 : Variables d'environnement Python obligatoires
+
+**Règle** : Définir ces 4 variables dans toutes les images Python.
+
+```dockerfile
+# ✓ FAIRE
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+```
+
+---
+
+### BLOC-D-007 : HEALTHCHECK obligatoire
+
+**Règle** : Toutes les images doivent définir HEALTHCHECK.
+
+```dockerfile
+# ✓ FAIRE
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Workers
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import redis; redis.Redis(host='redis').ping()" || exit 1
+
+# ✗ INTERDIT
+# Pas de HEALTHCHECK dans Dockerfile
+```
+
+**Paramètres standards** :
+- interval: 30s
+- timeout: 10s
+- retries: 3
+- start_period: 40s (API), 60s (OCR workers)
+
+**⚠️ VIOLATION FRÉQUENTE** : Healthchecks souvent absents ou incomplets (DB seulement, pas API). Pourtant endpoints `/health` existent généralement dans le code.
+
+**Impact si non respecté** :
+- Pas de détection automatique failures
+- Orchestrateurs (k8s, swarm) ne peuvent pas restart intelligemment
+- depends_on avec conditions inefficace
+
+---
+
+### BLOC-D-008 : COPY requirements avant code
+
+**Règle** : Optimiser cache Docker - requirements d'abord, code ensuite.
+
+```dockerfile
+# ✓ FAIRE
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app /app/app
+
+# ✗ INTERDIT
+COPY . .  # Tout copié d'un coup → cache invalidé à chaque modif
+RUN pip install -r requirements.txt
+```
+
+---
+
+### BLOC-D-009 : Format exec pour CMD
+
+**Règle** : Toujours format liste (exec), jamais string (shell).
+
+```dockerfile
+# ✓ FAIRE
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# ✗ INTERDIT
+CMD "uvicorn app.main:app --host 0.0.0.0"  # Format shell
+```
+
+---
+
+### BLOC-D-010 : Jamais de secrets dans image
+
+**Règle** : Aucun secret via ENV, ARG, ou COPY dans Dockerfile.
+
+```dockerfile
+# ✗ INTERDIT
+ENV API_KEY=sk-proj-xxx  # Secret hardcodé
+ARG DATABASE_PASSWORD=secret123
+COPY .env /app/.env  # Fichier secrets dans image
+```
+
+---
+
+### BLOC-D-011 : LABEL obligatoires
+
+**Règle** : Définir métadonnées pour traçabilité.
+
+```dockerfile
+# ✓ FAIRE
+LABEL maintainer="team@example.com"
+LABEL org.opencontainers.image.source="https://github.com/org/repo"
+LABEL org.opencontainers.image.version="2.1.0"
+LABEL org.opencontainers.image.created="2026-01-12T10:00:00Z"
+LABEL description="API Backend SaaS"
+```
+
+---
+
+### BLOC-D-012 : .dockerignore obligatoire
+
+**Règle** : Créer .dockerignore pour réduire build context.
+
+```dockerignore
+# ✓ FAIRE
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+node_modules
+.env*
+!.env.example
+*.md
+!README.md
+.gitignore
+.DS_Store
+tests/
+docs/
+```
+
+**Détection** : `! test -f .dockerignore`
+
+**⚠️ DETTE CRITIQUE TRÈS FRÉQUENTE** : Fichier .dockerignore **souvent absent**. Impact immédiat sur performance build.
+
+**Impact si non respecté** :
+- Build context complet envoyé au daemon (lent)
+- Cache invalidé trop souvent (.git changes)
+- Risque secrets copiés dans image (.env, .vscode)
+- Fichiers inutiles dans image (tests/, docs/)
+
+**Effort correction** : 15min (créer fichier)  
+**Gain** : Build 2-5x plus rapide selon taille repo
+
+---
+
+## 🔴 Règles BLOCKING - Docker Compose
+
+### BLOC-C-001 : Réseau nommé explicite
+
+**Règle** : Toujours network custom nommé, jamais bridge par défaut.
+
+```yaml
+# ✓ FAIRE
+networks:
+  app_network:
+    name: myapp_network
+    driver: bridge
+
+services:
+  api:
+    networks:
+      - app_network
+
+# ✗ INTERDIT
+services:
+  api:
+    # Pas de network → bridge par défaut
+```
+
+---
+
+### BLOC-C-002 : Healthchecks sur bases de données
+
+**Règle** : DB doivent avoir healthcheck + `condition: service_healthy`.
+
+```yaml
+# ✓ FAIRE
+postgres:
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U postgres"]
+    interval: 10s
+    timeout: 5s
+    retries: 5
+    start_period: 30s
+
+api:
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+# ✗ INTERDIT
+postgres:
+  image: postgres:15
+  # Pas de healthcheck
+
+api:
+  depends_on:
+    - postgres  # Pas de condition
+```
+
+---
+
+### BLOC-C-003 : Restart policy production
+
+**Règle** : `restart: unless-stopped` obligatoire en production.
+
+```yaml
+# ✓ FAIRE
+api:
+  restart: unless-stopped
+
+# ✗ INTERDIT (production)
+api:
+  # Pas de restart → container ne redémarre pas après crash
+```
+
+---
+
+### BLOC-C-004 : Logging avec rotation
+
+**Règle** : Configurer rotation logs pour tous services.
+
+```yaml
+# ✓ FAIRE
+api:
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# Services observabilité (Loki, Promtail)
+loki:
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "2"
+```
+
+---
+
+### BLOC-C-005 : Volumes nommés pour persistance
+
+**Règle** : Utiliser volumes nommés en production. Bind mounts dev uniquement.
+
+```yaml
+# ✓ FAIRE
+volumes:
+  postgres_data:
+  redis_data:
+
+services:
+  postgres:
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+# ✗ INTERDIT (production)
+services:
+  postgres:
+    volumes:
+      - ./data:/var/lib/postgresql/data  # Bind mount fragile
+```
+
+---
+
+### BLOC-C-006 : Ports internes non exposés
+
+**Règle** : Ne jamais exposer ports DB, Redis, queues publiquement.
+
+```yaml
+# ✓ FAIRE
+postgres:
+  # Pas de ports → accessible uniquement via réseau interne
+
+redis:
+  # Pas de ports
+
+# ✗ INTERDIT
+postgres:
+  ports:
+    - "5432:5432"  # Expose DB publiquement
+
+redis:
+  ports:
+    - "6379:6379"  # Expose cache publiquement
+```
+
+---
+
+### BLOC-C-007 : Variables via env_file
+
+**Règle** : Charger secrets depuis fichiers, pas inline.
+
+```yaml
+# ✓ FAIRE
+api:
+  env_file:
+    - .env.shared
+    - services/api.env
+
+# ✗ INTERDIT
+api:
+  environment:
+    - DATABASE_URL=postgres://user:pass@host/db  # Secret inline
+    - API_KEY=sk-xxx  # Secret en clair
+```
+
+---
+
+### BLOC-C-008 : Service names comme DNS
+
+**Règle** : Utiliser noms de services, jamais IP hardcodées.
+
+```yaml
+# ✓ FAIRE
+api:
+  environment:
+    - DATABASE_URL=postgres://user:pass@postgres:5432/db
+    - REDIS_URL=redis://redis:6379
+
+# ✗ INTERDIT
+api:
+  environment:
+    - DATABASE_URL=postgres://user:pass@172.20.0.3:5432/db  # IP
+```
+
+---
+
+### BLOC-C-009 : stop_grace_period pour workers
+
+**Règle** : Définir grace period pour jobs longs.
+
+```yaml
+# ✓ FAIRE
+worker:
+  stop_grace_period: 2m  # Temps pour finir tâches
+
+api:
+  stop_grace_period: 30s
+
+# ✗ INTERDIT (workers longs)
+worker:
+  # Default 10s → tâches interrompues brutalement
+```
+
+---
+
+### BLOC-C-010 : Pas de secrets inline
+
+**Règle** : Jamais de credentials en clair dans compose.
+
+```yaml
+# ✗ INTERDIT
+postgres:
+  environment:
+    - POSTGRES_PASSWORD=mypassword123
+
+minio:
+  environment:
+    - MINIO_ROOT_USER=admin
+    - MINIO_ROOT_PASSWORD=password123
+
+# ✓ FAIRE
+postgres:
+  env_file:
+    - .env.db  # Fichier non versionné
+  # OU
+  environment:
+    - POSTGRES_PASSWORD_FILE=/run/secrets/db_password
+  secrets:
+    - db_password
+```
+
+**⚠️ VIOLATION CRITIQUE FRÉQUENTE** : Secrets hardcodés détectés dans plusieurs projets réels (DB passwords, API keys).
+
+**Impact si non respecté** :
+- Credentials versionnés dans Git
+- Fuite sécurité si repo public/partagé
+- Rotation secrets impossible
+- Non-conformité SOC2/ISO27001
+
+**Effort correction** : 4h (migration vers Docker secrets ou vault externe)
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Structure fichiers par environnement
+
+**Règle** : Séparer compose base + overrides.
+
+```
+✓ docker-compose.yml          # Base
+✓ docker-compose.dev.yml      # Dev
+✓ docker-compose.staging.yml  # Staging
+✓ docker-compose.prod.yml     # Production
+```
+
+---
+
+### STRONG-002 : Ordre standard Dockerfile
+
+**Règle** : Respecter cet ordre pour lisibilité.
+
+```dockerfile
+1. FROM
+2. LABEL
+3. WORKDIR
+4. ENV
+5. RUN (dépendances système)
+6. COPY (requirements)
+7. RUN (dépendances Python)
+8. COPY (code)
+9. RUN (permissions)
+10. USER
+11. EXPOSE
+12. HEALTHCHECK
+13. CMD
+```
+
+---
+
+### STRONG-003 : Requirements séparés par contexte
+
+**Règle** : Organiser requirements par service.
+
+```
+docker/config/requirements/
+├── base.txt          # Commun
+├── api.txt           # API
+├── workers.txt       # Workers
+├── crons.txt         # Crons
+└── production.txt    # Surcharges prod
+```
+
+---
+
+### STRONG-004 : Platform explicite
+
+**Règle** : Définir platform pour builds reproductibles.
+
+```dockerfile
+# ✓ PRÉFÉRÉ
+FROM --platform=linux/amd64 python:3.11-slim
+```
+
+---
+
+### STRONG-005 : Versions épinglées production
+
+**Règle** : Pin versions APT en production.
+
+```dockerfile
+# ✓ PRÉFÉRÉ (production)
+RUN apt-get install -y \
+    curl=7.88.1-10+deb12u8 \
+    postgresql-client=15+248
+
+# ⚠ ACCEPTABLE (dev)
+RUN apt-get install -y curl postgresql-client
+```
+
+---
+
+### STRONG-006 : Resource limits
+
+**Règle** : Limiter CPU/RAM pour éviter saturation.
+
+```yaml
+# ✓ PRÉFÉRÉ
+api:
+  deploy:
+    resources:
+      limits:
+        cpus: '2.0'
+        memory: 2G
+      reservations:
+        cpus: '0.5'
+        memory: 512M
+```
+
+---
+
+### STRONG-007 : Healthchecks services applicatifs
+
+**Règle** : Définir healthchecks dans compose aussi.
+
+```yaml
+# ✓ PRÉFÉRÉ
+api:
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 40s
+```
+
+---
+
+### STRONG-008 : Labels Traefik standardisés
+
+**Règle** : Pattern cohérent pour routing.
+
+```yaml
+# ✓ PRÉFÉRÉ
+api:
+  labels:
+    - "traefik.enable=true"
+    - "traefik.http.routers.api.rule=Host(`api.example.com`)"
+    - "traefik.http.routers.api.entrypoints=websecure"
+    - "traefik.http.routers.api.tls=true"
+    - "traefik.http.services.api.loadbalancer.server.port=8000"
+```
+
+---
+
+### STRONG-009 : Combiner RUN pour layers
+
+**Règle** : Réduire nombre de layers.
+
+```dockerfile
+# ✓ PRÉFÉRÉ
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# ⚠ À ÉVITER
+RUN apt-get update
+RUN apt-get install -y curl
+RUN apt-get install -y build-essential
+RUN rm -rf /var/lib/apt/lists/*
+```
+
+---
+
+### STRONG-010 : Read-only volumes config
+
+**Règle** : Monter configs en read-only.
+
+```yaml
+# ✓ PRÉFÉRÉ
+api:
+  volumes:
+    - ./config:/app/config:ro
+    - ./ssl:/app/ssl:ro
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Distroless pour sécurité maximale
+
+```dockerfile
+# ✓ OPTIMAL
+FROM python:3.11-slim AS builder
+RUN pip install -r requirements.txt
+
+FROM gcr.io/distroless/python3-debian12
+COPY --from=builder /usr/local/lib/python3.11 /usr/local/lib/python3.11
+```
+
+---
+
+### OPT-002 : YAML anchors pour DRY
+
+```yaml
+# ✓ OPTIMAL
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  api:
+    logging: *default-logging
+  worker:
+    logging: *default-logging
+```
+
+---
+
+### OPT-003 : Profils pour services optionnels
+
+```yaml
+# ✓ OPTIMAL
+prometheus:
+  profiles: ["monitoring"]
+
+grafana:
+  profiles: ["monitoring"]
+
+# Usage: docker-compose --profile monitoring up
+```
+
+---
+
+### OPT-004 : BuildKit activé
+
+```dockerfile
+# ✓ OPTIMAL
+# syntax=docker/dockerfile:1.4
+
+FROM python:3.11-slim
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+```
+
+---
+
+## 📋 Anti-Patterns Critiques
+
+**Note** : Ces anti-patterns sont fréquemment observés dans des projets réels (voir `docs/docker/` pour analyses détaillées). Ils représentent des dettes techniques critiques à éviter absolument.
+
+### ❌ Run as root
+
+```dockerfile
+# JAMAIS
+# (pas de USER défini)
+```
+
+**Impact** : Compromet la sécurité, facilite l'escalation de privilèges  
+**Fréquence observée** : Très haute (détecté dans plusieurs projets)  
+**Effort correction** : 2h par Dockerfile
+
+### ❌ Secrets hardcodés
+
+```yaml
+# JAMAIS
+environment:
+  - PASSWORD=secret123
+  - DATABASE_URL=postgres://user:pass@host/db
+  - API_KEY=sk-xxx
+```
+
+**Impact** : Fuite de credentials, non-conformité sécurité  
+**Fréquence observée** : Haute  
+**Effort correction** : 4h (migration vers Docker secrets ou vault)
+
+### ❌ Bridge par défaut
+
+```yaml
+# JAMAIS
+services:
+  api:
+    # (pas de networks:)
+```
+
+**Impact** : Isolation réseau insuffisante  
+**Fréquence observée** : Moyenne
+
+### ❌ Latest en production
+
+```yaml
+# JAMAIS
+image: minio:latest  # Production
+image: postgres:latest
+```
+
+**Impact** : Builds non reproductibles, risque breaking changes  
+**Fréquence observée** : Haute
+
+### ❌ Ports DB exposés publiquement
+
+```yaml
+# JAMAIS
+postgres:
+  ports:
+    - "5432:5432"  # Accessible depuis l'extérieur
+redis:
+  ports:
+    - "6379:6379"
+```
+
+**Impact** : Surface d'attaque élevée, accès non autorisé  
+**Fréquence observée** : Moyenne
+
+### ❌ Pas de healthcheck
+
+```dockerfile
+# JAMAIS
+# (pas de HEALTHCHECK CMD)
+```
+
+**Impact** : Pas de détection automatique des failures  
+**Fréquence observée** : Très haute
+
+### ❌ Curl pipe to shell
+
+```dockerfile
+# JAMAIS
+RUN curl -fsSL https://install.sh | sh
+RUN wget -O- https://install.sh | bash
+```
+
+**Impact** : Script peut changer, pas de vérification intégrité, version non pinnée  
+**Fréquence observée** : Moyenne  
+**Alternative** : Télécharger release spécifique avec checksum
+
+### ❌ Image monolithique sans multi-stage
+
+```dockerfile
+# JAMAIS
+FROM python:3.11-slim
+RUN apt-get install build-essential gcc g++  # Reste dans image finale
+RUN pip install torch transformers
+COPY . .
+```
+
+**Impact** : Images lourdes (3-4GB+), surface d'attaque élevée  
+**Fréquence observée** : Haute  
+**Alternative** : Multi-stage builds
+
+### ❌ Pas de .dockerignore
+
+**Impact** : Build context complet (.git, .venv, tests inclus), cache invalidé trop souvent  
+**Fréquence observée** : Très haute  
+**Effort correction** : 15min
+
+### ❌ DISABLE_LOG_MASKING=true en production
+
+```yaml
+# JAMAIS EN PRODUCTION
+environment:
+  - DISABLE_LOG_MASKING=true
+```
+
+**Impact** : Logs peuvent contenir secrets, non-conformité RGPD  
+**Fréquence observée** : Moyenne
+
+---
+
+## ⚠️ Incohérences Communes à Éviter
+
+**Source** : Patterns d'incohérence détectés dans analyses de projets réels
+
+### Healthchecks partiels
+
+**Incohérence** : Healthcheck sur DB mais pas sur API
+```yaml
+# Incohérent
+postgres:
+  healthcheck:
+    test: ["CMD", "pg_isready"]
+
+api:
+  # Pas de healthcheck alors que endpoint /health existe
+```
+
+**Solution** : Healthcheck sur TOUS les services critiques
+
+### Restart policies asymétriques
+
+**Incohérence** : Services secondaires avec restart, services critiques sans
+```yaml
+# Incohérent
+bot:
+  restart: unless-stopped
+
+api:
+  # Pas de restart policy
+```
+
+**Solution** : Restart policy cohérente, priorité aux services critiques
+
+### Versions mixées
+
+**Incohérence** : Versions pinnées et flottantes mélangées
+```dockerfile
+# Incohérent
+RUN pip install playwright==1.40.0  # Version fixe
+RUN playwright install chromium     # Version latest
+```
+
+**Solution** : Cohérence dans le pinning des versions
+
+### Cache doublon
+
+**Incohérence** : Assets téléchargés au build ET via volume
+```dockerfile
+# Dans Dockerfile
+RUN python -c "import model; model.download()"
+
+# Dans compose
+volumes:
+  - model_cache:/app/.cache  # Cache inutile si déjà dans image
+```
+
+**Solution** : Choisir une stratégie unique (build OU runtime)
+
+### Sécurité sélective
+
+**Incohérence** : Certains aspects sécurisés, d'autres ignorés
+- ✓ Network isolé
+- ✓ Ports non exposés
+- ✗ Run as root
+- ✗ Secrets en clair
+
+**Solution** : Approche holistique de la sécurité
+
+---
+
+## 🎯 Checklist Validation
+
+### Dockerfile
+
+- [ ] Image base `python:X.XX-slim`
+- [ ] Multi-stage builds (si dépendances build)
+- [ ] User non-root créé et utilisé
+- [ ] `WORKDIR /app`
+- [ ] Variables ENV Python (4 obligatoires)
+- [ ] Nettoyage APT après install
+- [ ] `PIP_NO_CACHE_DIR=1`
+- [ ] HEALTHCHECK défini
+- [ ] LABEL métadonnées
+- [ ] COPY requirements avant code
+- [ ] CMD format exec
+- [ ] Pas de secrets
+- [ ] .dockerignore présent
+
+### Docker Compose
+
+- [ ] Réseau nommé custom
+- [ ] Healthchecks DB avec `condition`
+- [ ] `restart: unless-stopped`
+- [ ] Logging avec rotation
+- [ ] Volumes nommés
+- [ ] Ports internes non exposés
+- [ ] Variables via `env_file`
+- [ ] Service names DNS
+- [ ] `stop_grace_period` workers
+- [ ] Pas de secrets inline
+- [ ] Resource limits définis
+- [ ] Healthchecks services
+
+---
+
+## 🔍 Commandes de Détection
+
+```bash
+#!/bin/bash
+# validate_docker.sh
+
+echo "🔍 Validation règles Docker..."
+
+# Dockerfile
+echo "❌ Images non-slim:"
+grep "FROM python" **/Dockerfile | grep -v "slim"
+
+echo "❌ Containers root:"
+find . -name "Dockerfile" -exec sh -c 'grep -L "^USER" "$1"' _ {} \;
+
+echo "❌ Pas de multi-stage:"
+find . -name "Dockerfile" -exec sh -c 'test $(grep -c "^FROM" "$1") -eq 1 && echo "$1"' _ {} \;
+
+echo "❌ Pas de HEALTHCHECK:"
+find . -name "Dockerfile" -exec sh -c 'grep -L "HEALTHCHECK" "$1"' _ {} \;
+
+echo "❌ Pas de .dockerignore:"
+find . -name "Dockerfile" -exec sh -c 'test ! -f "$(dirname "$1")/.dockerignore" && echo "$1"' _ {} \;
+
+# Compose
+echo "❌ Pas de réseau custom:"
+grep -L "networks:" docker-compose*.yml
+
+echo "❌ Ports DB exposés:"
+grep "5432:5432\|6379:6379\|27017:27017" docker-compose*.yml
+
+echo "❌ Secrets inline:"
+grep -E "PASSWORD=|API_KEY=|SECRET=" docker-compose*.yml | grep -v "env_file"
+
+echo "❌ Pas de restart:"
+grep -L "restart:" docker-compose*.yml
+
+echo "❌ Pas de logging rotation:"
+grep -L "max-size:" docker-compose*.yml
+
+echo "❌ IP hardcodées:"
+grep -E "[0-9]{1,3}(\.[0-9]{1,3}){3}" docker-compose*.yml
+
+echo "✅ Validation terminée"
+```
+
+---
+
+## 📊 Scoring
+
+### Sécurité (poids 40%)
+| Critère | Points | Violation fréquente |
+|---------|--------|---------------------|
+| User non-root | 10 | ⚠️ Très haute |
+| Pas de secrets hardcodés | 10 | ⚠️ Haute |
+| Capabilities restreintes | 5 | Haute |
+| Read-only rootfs | 5 | Haute |
+| Scan vulnérabilités | 10 | Moyenne |
+
+### Fiabilité (poids 30%)
+| Critère | Points | Violation fréquente |
+|---------|--------|---------------------|
+| Healthchecks | 10 | ⚠️ Très haute |
+| Restart policies | 5 | Haute |
+| Resource limits | 5 | ⚠️ Haute |
+| Grace periods | 5 | Moyenne |
+| Depends_on conditions | 5 | Basse |
+
+### Performance (poids 20%)
+| Critère | Points | Violation fréquente |
+|---------|--------|---------------------|
+| Multi-stage builds | 10 | ⚠️ Haute |
+| Layer optimization | 5 | Moyenne |
+| Cache optimization (.dockerignore) | 5 | ⚠️ Très haute |
+
+### Maintenabilité (poids 10%)
+| Critère | Points | Violation fréquente |
+|---------|--------|---------------------|
+| Labels métadonnées | 3 | Très haute |
+| .dockerignore | 2 | ⚠️ Très haute |
+| Structure claire | 3 | Basse |
+| Documentation | 2 | Haute |
+
+**Score minimum acceptable : 70/100**  
+**Score moyen projets analysés : 50-60/100**  
+**Score cible production : 85/100**
+
+### Grille d'évaluation rapide
+
+- **90-100** : Excellent, production-ready
+- **70-89** : Bon, quelques optimisations possibles
+- **50-69** : Fonctionnel mais dettes importantes
+- **30-49** : Problématique, refactoring nécessaire
+- **<30** : Critique, risques majeurs
+
+---
+
+## 📊 Priorités Dettes Techniques (Basées sur Analyses Réelles)
+
+### Critiques (à corriger immédiatement)
+
+| Dette | Fréquence | Impact | Effort | Priorité |
+|-------|-----------|--------|--------|----------|
+| Containers run as root | Très haute | Sécurité critique | 2h | P0 |
+| Secrets hardcodés | Haute | Fuite credentials | 4h | P0 |
+| Pas de .dockerignore | Très haute | Performance build | 15min | P0 |
+| Images `latest` en prod | Haute | Non reproductible | 1h | P0 |
+
+### Importantes (à planifier sous 2 semaines)
+
+| Dette | Fréquence | Impact | Effort | Priorité |
+|-------|-----------|--------|--------|----------|
+| Pas de multi-stage | Haute | Images 3-4GB | 1 jour | P1 |
+| Healthchecks incomplets | Très haute | Pas de détection failures | 2h | P1 |
+| Pas de resource limits | Haute | Risque OOM | 1h | P1 |
+| Pas de versioning images | Haute | Impossible rollback | 1 jour | P1 |
+| Tools version non pinnées | Moyenne | Builds non reproductibles | 1h | P1 |
+
+### Mineures (dette acceptable court terme)
+
+| Dette | Fréquence | Impact | Effort | Priorité |
+|-------|-----------|--------|--------|----------|
+| Pas de labels métadonnées | Haute | Traçabilité | 30min | P2 |
+| Logs non rotatés | Moyenne | Disk space | 15min | P2 |
+| Restart policies incohérentes | Moyenne | Downtime | 15min | P2 |
+| Capabilities non restreintes | Basse | Surface d'attaque | 1h | P2 |
+
+**Score moyen observé projets réels : 5-6/10**  
+**Score cible avec corrections P0+P1 : 8-9/10**
+
+---
+
+## Version
+
+**Version** : 2.1.0 (Alignée avec analyses projets)  
+**Date** : 2026-01-12  
+**Type** : Règles Docker unifiées Dockerfile + Compose  
+**Sources** : Analyses de projets réels consolidées

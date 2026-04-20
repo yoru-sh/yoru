@@ -1,0 +1,343 @@
+---
+description: Conventions de routes et versioning pour APIs REST - agnostique projet
+alwaysApply: true
+globs:
+  - "app/api/routers/**/*.py"
+  - "app/**/routers/**/*.py"
+---
+
+# Règles Routes & Versioning API
+
+## Contexte
+
+**Cible** : FastAPI REST APIs + Backend SaaS  
+**Audience** : LLM et développeurs  
+**Application** : Contrat API stable, non négociable  
+**Portée** : Agnostique au domaine métier
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Versioning obligatoire dans URL
+
+**Règle** : Toutes les routes API principales doivent être préfixées par `/api/v{N}`.
+
+```python
+# ✓ FAIRE
+app.include_router(entities_router, prefix="/api/v1")
+app.include_router(tasks_router, prefix="/api/v1")
+
+router = APIRouter(prefix="/entities", tags=["entities"])
+
+# ✗ INTERDIT
+app.include_router(entities_router, prefix="/api")  # Pas de version
+app.include_router(tasks_router)  # Pas de prefix du tout
+```
+
+**Rationale** : Évite breaking changes accidentels. Une fois en production, aucune modification ne peut casser les clients.
+
+**Exception** : Endpoints publics utilitaires (`/health`, `/metrics`) peuvent être sans version.
+
+---
+
+### BLOC-002 : Verbes HTTP sémantiquement corrects
+
+**Règle** : Respecter strictement la sémantique HTTP des verbes.
+
+```python
+# ✓ FAIRE
+@router.get("/{entity_id}")              # Lecture
+async def get_entity(entity_id: UUID): pass
+
+@router.post("")                         # Création
+async def create_entity(data: EntityCreate): pass
+
+@router.patch("/{entity_id}")            # Mise à jour partielle
+async def update_entity(entity_id: UUID, data: EntityUpdate): pass
+
+@router.delete("/{entity_id}")           # Suppression
+async def delete_entity(entity_id: UUID): pass
+
+@router.post("/{entity_id}/process")     # Action non-CRUD
+async def process_entity(entity_id: UUID): pass
+
+# ✗ INTERDIT
+@router.get("/{entity_id}/delete")       # ✗ GET pour mutation
+@router.post("/{entity_id}")             # ✗ POST pour lecture
+```
+
+**Mapping standard** :
+- `GET` : lecture, listing, récupération de statut
+- `POST` : création, actions impératives, opérations non-idempotentes
+- `PATCH` : mise à jour partielle
+- `PUT` : mise à jour complète (si besoin)
+- `DELETE` : suppression logique ou physique
+
+---
+
+### BLOC-003 : Ressources au pluriel
+
+**Règle** : Les noms de ressources doivent toujours être au pluriel.
+
+```python
+# ✓ FAIRE
+router = APIRouter(prefix="/entities", tags=["entities"])
+router = APIRouter(prefix="/orders", tags=["orders"])
+router = APIRouter(prefix="/documents", tags=["documents"])
+
+# ✗ INTERDIT
+router = APIRouter(prefix="/entity")     # ✗ Singulier
+router = APIRouter(prefix="/order")      # ✗ Singulier
+```
+
+**Exception** : Endpoints `/me` pour ressources de l'utilisateur courant.
+
+---
+
+### BLOC-004 : /me obligatoire pour ressources utilisateur courant
+
+**Règle** : Toute ressource liée à l'utilisateur authentifié doit passer par le namespace `/me`, jamais par `/users/{id}` avec l'ID de l'utilisateur courant.
+
+```python
+# ✓ FAIRE
+GET /api/v1/me                    # Profil utilisateur courant
+GET /api/v1/me/items              # Items de l'utilisateur
+PATCH /api/v1/me/settings         # Paramètres utilisateur
+DELETE /api/v1/me/sessions        # Sessions utilisateur
+
+# ✗ INTERDIT
+GET /api/v1/users/{my_user_id}                 # ✗ Utiliser /me
+GET /api/v1/users/{my_user_id}/items           # ✗ Utiliser /me/items
+PATCH /api/v1/users/{authenticated_user}/prefs # ✗ Utiliser /me/settings
+```
+
+**Rationale** : 
+- Sémantique claire : `/me` = utilisateur authentifié
+- Évite erreurs : pas besoin de passer user_id
+- Sécurité : impossible d'accéder aux ressources d'un autre utilisateur par erreur
+
+---
+
+### BLOC-005 : Hiérarchie RESTful pour sous-ressources
+
+**Règle** : Utiliser la hiérarchie `/{resource}/{id}/{sub-resource}` pour sous-ressources et actions.
+
+```python
+# ✓ FAIRE
+@router.get("/videos/{video_id}/segments")          # Sous-ressource
+@router.post("/agents/{agent_id}/runs")             # Action créant une ressource
+@router.get("/invoices/{invoice_id}/pdf")           # Représentation alternative
+@router.post("/executions/{execution_id}/cancel")   # Action impérative
+
+# ✗ INTERDIT
+@router.get("/video-segments/{video_id}")           # ✗ Flat
+@router.post("/run-agent/{agent_id}")               # ✗ Verbe dans URL
+```
+
+---
+
+### BLOC-005 : Tags FastAPI obligatoires
+
+**Règle** : Tous les routers doivent déclarer des tags pour documentation OpenAPI.
+
+```python
+# ✓ FAIRE
+router = APIRouter(prefix="/entities", tags=["entities"])
+router = APIRouter(prefix="/auth", tags=["authentication"])
+
+# ✗ INTERDIT
+router = APIRouter(prefix="/entities")  # ✗ Pas de tags
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Pas de verbes dans les URLs
+
+**Règle** : Les URLs doivent être des noms de ressources, pas des verbes d'action.
+
+```python
+# ✓ PRÉFÉRÉ
+POST /videos/{id}/enrich        # Action via POST sur sous-ressource
+POST /executions/{id}/cancel    # Action via POST
+POST /invoices/{id}/retry       # Action via POST
+
+# ⚠ TOLÉRÉ mais déconseillé
+POST /videos/{id}/start-enrichment   # Verbe explicite si vraiment nécessaire
+
+# ✗ À ÉVITER
+GET /get-video/{id}             # ✗ get- redondant
+POST /create-entity             # ✗ create- redondant
+DELETE /remove-invoice/{id}     # ✗ remove- redondant
+```
+
+**Exception** : Validations lecture-seule peuvent avoir préfixe `check-`.
+
+```python
+# ✓ ACCEPTABLE
+GET /check-username/{username}
+GET /entities/{id}/check-permission
+```
+
+---
+
+### STRONG-002 : Router class pattern avec get_router()
+
+**Règle** : Organiser les routers en classes avec méthode `get_router()`.
+
+```python
+# ✓ PRÉFÉRÉ
+class EntityRouter:
+    def __init__(self):
+        self.router = APIRouter(prefix="/entities", tags=["entities"])
+        self.service: EntityService | None = None
+        self.logger = LoggingController(app_name="EntityRouter")
+        self._setup_routes()
+    
+    def _setup_routes(self) -> None:
+        @self.router.get("/{entity_id}")
+        async def get_entity(entity_id: UUID):
+            return await self.service.get_by_id(entity_id)
+    
+    def get_router(self) -> APIRouter:
+        return self.router
+    
+    def initialize_services(self) -> None:
+        self.service = EntityService()
+
+# main.py
+entity_router = EntityRouter()
+entity_router.initialize_services()
+app.include_router(entity_router.get_router())
+```
+
+---
+
+### STRONG-003 : Cohérence prefix router
+
+**Règle** : Le prefix du router doit correspondre au nom de la ressource plurielle.
+
+```python
+# ✓ PRÉFÉRÉ
+# app/api/routers/entities/router.py
+router = APIRouter(prefix="/entities", tags=["entities"])
+
+# app/api/routers/documents/router.py
+router = APIRouter(prefix="/documents", tags=["documents"])
+```
+
+---
+
+### STRONG-004 : Routes admin séparées
+
+**Règle** : Isoler les routes administratives sous `/admin` ou `/api/v1/admin`.
+
+```python
+# ✓ PRÉFÉRÉ
+router = APIRouter(prefix="/admin/users", tags=["admin"])
+
+@router.get("")
+async def list_all_users(admin_id: UUID = Depends(get_current_admin_id)):
+    pass
+
+# Alternative acceptable
+router = APIRouter(prefix="/api/v1/admin/features", tags=["admin"])
+```
+
+---
+
+### STRONG-005 : Actions POST pour opérations non-CRUD
+
+**Règle** : Utiliser POST avec verbe explicite pour actions métier non-CRUD.
+
+```python
+# ✓ PRÉFÉRÉ
+POST /api/v1/orders/{id}/process
+POST /api/v1/documents/{id}/publish
+POST /api/v1/items/{id}/archive
+
+# ⚠ INCOHÉRENT
+# app/api/routers/video/router.py
+router = APIRouter(prefix="/vids")  # Nom abrégé différent du module
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Docstrings sur endpoints
+
+**Règle** : Ajouter des docstrings descriptives sur les endpoints pour documentation auto-générée.
+
+```python
+# ✓ OPTIMAL
+@router.post("/{video_id}/enrich")
+async def enrich_video(video_id: UUID):
+    """
+    Lance l'enrichissement d'une vidéo en background.
+    
+    L'enrichissement inclut :
+    - Résumé de chaque segment
+    - Identification des speakers
+    - Extraction des topics
+    
+    Retourne immédiatement (202) et traite en async.
+    """
+    pass
+```
+
+---
+
+### OPT-002 : Query params avec descriptions
+
+**Règle** : Documenter les query parameters avec Query(..., description="...").
+
+```python
+# ✓ OPTIMAL
+@router.get("")
+async def list_entities(
+    status: str | None = Query(None, description="Filter by status: active, inactive, pending"),
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    limit: int = Query(50, ge=1, le=200, description="Items per page (max 200)")
+):
+    pass
+```
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist routes API** :
+
+- [ ] Prefix `/api/v1` sur toutes les routes principales
+- [ ] Tags FastAPI déclarés sur tous les routers
+- [ ] Verbes HTTP sémantiquement corrects
+- [ ] Ressources au pluriel (sauf `/me`)
+- [ ] Pas de verbes dans URLs (sauf check-)
+- [ ] Sous-ressources via hiérarchie `/{id}/{sub-resource}`
+- [ ] Routes admin séparées sous `/admin`
+- [ ] Router class avec `get_router()` et `initialize_services()`
+
+**Commandes utiles** :
+
+```bash
+# Vérifier versioning
+grep -r "include_router.*prefix=" app/ | grep -v "/api/v"
+
+# Vérifier tags manquants
+grep -r "APIRouter(prefix=" app/ | grep -v "tags="
+
+# Vérifier verbes HTTP
+grep -r "@router.get.*delete" app/  # GET pour delete = mauvais
+grep -r "@router.post.*get" app/    # POST pour get = mauvais
+```
+
+**Anti-patterns fréquents** :
+
+❌ Mix versioning (`/api/v1/` et `/api/`)  
+❌ Ressources singulières (`/entity`, `/invoice`)  
+❌ Verbes dans URLs (`/get-entity`, `/create-invoice`)  
+❌ Tags manquants  
+❌ Routes admin mélangées aux routes user

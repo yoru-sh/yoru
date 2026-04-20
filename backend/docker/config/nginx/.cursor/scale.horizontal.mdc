@@ -1,0 +1,297 @@
+---
+description: Règles horizontal scaling API et workers
+alwaysApply: true
+globs:
+  - "**/docker-compose*.yml"
+  - "**/*worker*.py"
+  - "**/*router*.py"
+---
+
+# Horizontal Scaling
+
+## 🔴 BLOCKING
+
+### BLOC-HZ-001 : API 100% stateless requis
+
+**Règle** : Zéro état local dans l'API
+
+**Vérifications** :
+- Pas de variables globales mutables
+- Pas de sessions in-memory
+- Pas de cache local non-partagé
+
+**État externe** : Redis/DB uniquement
+
+---
+
+### BLOC-HZ-002 : Multi-workers Uvicorn en production
+
+**Règle** : Utiliser tous les CPU cores
+
+**Config** :
+```bash
+uvicorn app.main:app --workers N --host 0.0.0.0
+```
+
+**N** = nb_cpu_cores (ou nb_cpu_cores - 1)
+
+**Interdit** : Single worker en production
+
+---
+
+### BLOC-HZ-003 : Load balancer requis si >1 instance
+
+**Règle** : Jamais DNS direct vers instances
+
+**Solutions** :
+- Traefik
+- Nginx
+- HAProxy
+
+**Health checks** : Obligatoires (interval 10s)
+
+---
+
+### BLOC-HZ-004 : correlation_id propagé
+
+**Règle** : Traçabilité cross-instances obligatoire
+
+**Pattern** :
+```python
+correlation_id = request.headers.get("X-Correlation-ID") or generate_uuid()
+logger.bind(correlation_id=correlation_id)
+```
+
+**Propagation** : Tous logs + headers sortants
+
+---
+
+## 🟡 STRONG
+
+### STRONG-HZ-001 : Round-robin load balancing
+
+**Règle** : Pas de sticky sessions par défaut
+
+**Pourquoi** : API stateless = pas besoin d'affinité
+
+**Exception** : SSE/WebSocket longue durée
+
+---
+
+### STRONG-HZ-002 : Health endpoint détaillé
+
+**Règle** : GET /health avec dépendances
+
+**Réponse** :
+```json
+{
+  "status": "healthy",
+  "instance_id": "api-1",
+  "dependencies": {
+    "redis": "ok",
+    "db": "ok"
+  }
+}
+```
+
+**Load balancer** : Retire instance si unhealthy
+
+---
+
+### STRONG-HZ-003 : Graceful shutdown workers
+
+**Règle** : Finir jobs en cours avant shutdown
+
+**Pattern** :
+1. SIGTERM reçu
+2. Stop accept new jobs
+3. Wait current jobs finish (max 2min)
+4. Exit
+
+**stop_grace_period** : 2min minimum
+
+---
+
+### STRONG-HZ-004 : Workers ne traitent qu'idle jobs
+
+**Règle** : Jamais tuer worker busy
+
+**Détection** :
+```python
+idle_workers = active_workers - busy_workers
+if workers_to_remove > idle_workers:
+    NOOP  # Attendre
+```
+
+---
+
+### STRONG-HZ-005 : Autoscaling based on queue depth
+
+**Règle** : Scale workers selon backlog
+
+**Formule simple** :
+```
+workers_needed = ceil(queue_depth / jobs_per_worker_per_minute)
+```
+
+**Bounds** : w_min ≤ workers ≤ w_max
+
+---
+
+### STRONG-HZ-006 : Cooldown entre scale actions
+
+**Règle** : Éviter oscillations
+
+**Cooldown** :
+- Scale up : 30s
+- Scale down : 5min
+
+**Pourquoi** : Stabilisation
+
+---
+
+## 🟢 OPTIONAL
+
+### OPT-HZ-001 : Sticky sessions SSE/WebSocket
+
+**Règle** : Cookie affinity pour streaming
+
+**Quand** : SSE >5min ou WebSocket
+
+**Config Traefik** :
+```yaml
+labels:
+  - "traefik.http.services.api.loadbalancer.sticky.cookie=true"
+```
+
+---
+
+### OPT-HZ-002 : Autoscaling automatique Kubernetes
+
+**Règle** : HPA (Horizontal Pod Autoscaler)
+
+**Quand** : Cloud native deployment
+
+**Metrics** :
+- CPU >70% → scale up
+- Queue depth >100 → scale up
+
+---
+
+### OPT-HZ-003 : Scale to zero
+
+**Règle** : 0 workers si queue vide >1h
+
+**Conditions** :
+- Queue vide
+- Arrival rate = 0
+- allow_scale_to_zero=true
+
+**Jamais** : En production critique
+
+---
+
+## 📋 Anti-Patterns
+
+### ❌ Single worker production
+
+```yaml
+# INTERDIT
+command: uvicorn app.main:app --host 0.0.0.0
+
+# FAIRE
+command: uvicorn app.main:app --workers 4 --host 0.0.0.0
+```
+
+### ❌ État local API
+
+```python
+# INTERDIT
+user_sessions = {}  # État local
+
+# FAIRE
+# Redis pour sessions
+```
+
+### ❌ Pas de load balancer
+
+```yaml
+# INTERDIT
+ports:
+  - "8000:8000"  # Expose direct instance
+
+# FAIRE
+# Traefik devant instances
+```
+
+### ❌ Scale workers busy
+
+```python
+# INTERDIT
+workers_to_kill = workers[:3]  # Peut tuer busy workers
+
+# FAIRE
+idle = [w for w in workers if w.status == "idle"]
+workers_to_kill = idle[:3]
+```
+
+---
+
+## 🎯 Checklist
+
+- [ ] API 100% stateless
+- [ ] Multi-workers Uvicorn
+- [ ] Load balancer avec health checks
+- [ ] correlation_id propagé
+- [ ] Round-robin LB
+- [ ] Health endpoint détaillé
+- [ ] Graceful shutdown workers
+- [ ] Scale only idle workers
+- [ ] Autoscaling queue-based
+- [ ] Cooldown scale actions
+
+---
+
+## 🔍 Détection
+
+```bash
+# Single worker
+grep "uvicorn.*app:app" docker-compose*.yml | grep -v "workers"
+
+# État local API
+grep -r "^[A-Z_]* = {}" app/api/ --include="*.py"
+
+# Pas de health endpoint
+! grep -r "/health" app/api/ --include="*.py"
+
+# Pas de correlation_id
+! grep -r "correlation.id\|correlation-id" --include="*.py"
+```
+
+---
+
+## 📊 Capacity Planning
+
+### API Instances
+
+**1 instance (4 workers)** :
+- ~500 req/s (endpoints légers)
+- ~50 req/s (endpoints lourds)
+
+**Saturation** : CPU >80% sustained
+
+### Workers
+
+**1 worker** :
+- ~5-10 jobs/min (jobs courts)
+- ~1-2 jobs/min (jobs longs)
+
+**Saturation** : Queue depth >20 sustained
+
+---
+
+## Version
+
+**Version** : 1.0.0  
+**Date** : 2026-01-12  
+**Type** : Règles horizontal scaling

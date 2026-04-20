@@ -1,0 +1,33 @@
+# API service for SaaS stack
+
+services:
+  api:
+    build:
+      context: ../../..
+      dockerfile: docker/image/api/Dockerfile
+    image: saasforge-api:latest
+    container_name: saas_api
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    env_file:
+      - ../../config/env/.env.shared
+      - ../../config/env/.env.api
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - saas_network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

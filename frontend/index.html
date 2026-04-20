@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Receipt — session receipts for AI coding agents</title>
+    <script>
+      // Pre-mount theme bootstrap — prevents FOUC. Dark is the product default;
+      // explicit localStorage choice wins; otherwise we only flip to light when
+      // the user's system preference is light.
+      (function () {
+        try {
+          var stored = localStorage.getItem('theme');
+          var root = document.documentElement;
+          if (stored === 'light') {
+            root.classList.remove('dark');
+          } else if (stored === 'dark') {
+            root.classList.add('dark');
+          } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+            root.classList.remove('dark');
+          }
+        } catch (_) { /* storage blocked — leave dark default */ }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,431 @@
+---
+description: Structure des réponses API - Models Pydantic, serialisation - agnostique projet
+alwaysApply: true
+globs:
+  - "app/api/models/**/*.py"
+  - "app/api/routers/**/*.py"
+  - "app/**/models/**/*.py"
+---
+
+# Règles Structure des Réponses API
+
+## Contexte
+
+**Cible** : FastAPI REST APIs + Pydantic Models  
+**Audience** : LLM et développeurs  
+**Application** : Contrat API stable, non négociable  
+**Portée** : Agnostique au domaine métier
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : BaseModel Pydantic pour toutes réponses
+
+**Règle** : Toutes les réponses API doivent être des BaseModel Pydantic, jamais dict brut.
+
+```python
+# ✓ FAIRE
+from pydantic import BaseModel, Field
+from uuid import UUID
+from datetime import datetime
+
+class EntityResponse(BaseModel):
+    id: UUID
+    name: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+@router.get("/{id}", response_model=EntityResponse)
+async def get_entity(entity_id: UUID) -> EntityResponse:
+    return await service.get_by_id(entity_id)
+
+# ✗ INTERDIT
+@router.get("/{id}")
+async def get_entity(entity_id: UUID) -> dict:  # ✗ dict brut
+    return {"id": str(entity_id), "name": "test"}
+```
+
+---
+
+### BLOC-002 : Timestamps ISO 8601 obligatoires
+
+**Règle** : Tous les timestamps doivent être sérialisés en ISO 8601.
+
+```python
+# ✓ FAIRE
+from pydantic import BaseModel, ConfigDict
+from datetime import datetime
+
+class EntityResponse(BaseModel):
+    model_config = ConfigDict(
+        json_encoders={
+            datetime: lambda v: v.isoformat() if v else None
+        }
+    )
+    
+    created_at: datetime
+    updated_at: datetime
+    deleted_at: datetime | None = None
+
+# Résultat JSON
+{
+    "created_at": "2026-01-12T10:30:00Z",
+    "updated_at": "2026-01-12T15:45:30.123456Z",
+    "deleted_at": null
+}
+
+# ✗ INTERDIT
+# Timestamps en epoch/unix
+{"created_at": 1640000000}  # ✗
+
+# Timestamps en format custom
+{"created_at": "12/01/2026 10:30"}  # ✗
+```
+
+---
+
+### BLOC-003 : from_attributes pour ORM mapping
+
+**Règle** : BaseModel doivent avoir `from_attributes=True` pour mapping ORM.
+
+```python
+# ✓ FAIRE
+class EntityResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    
+    id: UUID
+    name: str
+    created_at: datetime
+
+# Usage avec SQLAlchemy/Supabase
+orm_entity = supabase.table("entities").select("*").eq("id", entity_id).single()
+response = EntityResponse.model_validate(orm_entity.data)
+
+# ✗ INTERDIT
+class EntityResponse(BaseModel):
+    # ✗ Pas de from_attributes
+    id: UUID
+    name: str
+```
+
+---
+
+### BLOC-004 : Séparation Request/Response models
+
+**Règle** : Séparer strictement les models Request (input) et Response (output).
+
+```python
+# ✓ FAIRE
+class EntityCreate(BaseModel):
+    """Model pour création (POST)."""
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    status: str = "pending"
+
+class EntityUpdate(BaseModel):
+    """Model pour update (PATCH) - tous champs optionnels."""
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = None
+    status: str | None = None
+
+class EntityResponse(BaseModel):
+    """Model pour réponse - inclut champs générés."""
+    id: UUID
+    name: str
+    description: str | None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+# ✗ INTERDIT
+class Entity(BaseModel):  # ✗ Model unique pour tout
+    id: UUID | None = None  # ✗ Mélange création et lecture
+    name: str
+    created_at: datetime | None = None  # ✗ Optionnel mais toujours présent en lecture
+```
+
+---
+
+### BLOC-005 : Wrapper pour collections
+
+**Règle** : Les listes doivent être wrappées dans un objet, pas retournées directement.
+
+```python
+# ✓ FAIRE
+class EntityListResponse(BaseModel):
+    items: list[EntityResponse]
+    total: int
+    page: int
+    page_size: int
+
+@router.get("", response_model=EntityListResponse)
+async def list_entities() -> EntityListResponse:
+    return EntityListResponse(
+        items=[...],
+        total=100,
+        page=1,
+        page_size=50
+    )
+
+# ✗ INTERDIT
+@router.get("", response_model=list[EntityResponse])
+async def list_entities() -> list[EntityResponse]:  # ✗ Liste nue
+    return [...]
+```
+
+**Rationale** : Impossible d'ajouter metadata (pagination, total) à une liste nue sans breaking change.
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Field avec description pour documentation
+
+**Règle** : Utiliser Field(..., description="...") pour champs importants.
+
+```python
+# ✓ PRÉFÉRÉ
+class EntityResponse(BaseModel):
+    id: UUID = Field(..., description="Unique identifier")
+    name: str = Field(..., description="Entity display name")
+    status: str = Field(..., description="Current status: pending, active, completed")
+    created_at: datetime = Field(..., description="Creation timestamp (ISO 8601)")
+```
+
+---
+
+### STRONG-002 : Enums sérialisés en valeurs
+
+**Règle** : Configurer Pydantic pour sérialiser enums en valeurs string.
+
+```python
+# ✓ PRÉFÉRÉ
+from enum import Enum
+from pydantic import BaseModel, ConfigDict
+
+class EntityStatus(str, Enum):
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+
+class EntityResponse(BaseModel):
+    model_config = ConfigDict(use_enum_values=True)
+    
+    id: UUID
+    status: EntityStatus  # Sérialisé en "pending", pas "EntityStatus.PENDING"
+
+# JSON output
+{"id": "...", "status": "pending"}  # ✓ String
+```
+
+---
+
+### STRONG-003 : Champs optionnels avec None explicite
+
+**Règle** : Les champs optionnels doivent avoir default=None explicite.
+
+```python
+# ✓ PRÉFÉRÉ
+class EntityResponse(BaseModel):
+    id: UUID
+    name: str
+    description: str | None = None          # ✓ Explicite
+    metadata: dict | None = None            # ✓ Explicite
+    parent_id: UUID | None = None           # ✓ Explicite
+
+# ⚠ MOINS CLAIR
+class EntityResponse(BaseModel):
+    description: str | None  # Implicite mais moins clair
+```
+
+---
+
+### STRONG-004 : Pas de nested list directement
+
+**Règle** : Éviter listes imbriquées sans wrapper.
+
+```python
+# ✓ PRÉFÉRÉ
+class OrderItemResponse(BaseModel):
+    id: UUID
+    name: str
+    quantity: int
+
+class OrderResponse(BaseModel):
+    id: UUID
+    total: Decimal
+    items: list[OrderItemResponse]  # ✓ Liste d'objets typés
+
+# ⚠ À ÉVITER
+class OrderResponse(BaseModel):
+    items: list[list[str]]  # ⚠ Liste de listes
+    tags: list[dict]           # ⚠ Liste de dicts non typés
+```
+
+---
+
+### STRONG-005 : Relations imbriquées limitées
+
+**Règle** : Limiter la profondeur d'imbrication à 2-3 niveaux maximum.
+
+```python
+# ✓ PRÉFÉRÉ - 2 niveaux
+class EntityResponse(BaseModel):
+    id: UUID
+    name: str
+    owner: UserSummary  # ✓ 1 niveau
+
+class UserSummary(BaseModel):
+    id: UUID
+    name: str
+    # Pas de nested relations ici
+
+# ⚠ À ÉVITER - >3 niveaux
+class EntityResponse(BaseModel):
+    owner: UserResponse
+        organization: OrganizationResponse
+            parent: OrganizationResponse
+                creator: UserResponse  # ⚠ 4 niveaux
+```
+
+---
+
+### STRONG-006 : Pagination structure standardisée
+
+**Règle** : Utiliser une structure de pagination cohérente.
+
+```python
+# ✓ PRÉFÉRÉ
+class PaginationMetadata(BaseModel):
+    total: int = Field(..., description="Total items count")
+    page: int = Field(..., ge=1, description="Current page (1-indexed)")
+    page_size: int = Field(..., ge=1, le=200, description="Items per page")
+    total_pages: int = Field(..., description="Total pages")
+    has_more: bool = Field(..., description="Has next page")
+
+class EntityListResponse(BaseModel):
+    items: list[EntityResponse]
+    pagination: PaginationMetadata
+
+# Calcul total_pages
+total_pages = (total + page_size - 1) // page_size  # Ceiling division
+has_more = page < total_pages
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Summary field pour agrégations
+
+**Règle** : Ajouter un champ summary optionnel pour métadonnées agrégées.
+
+```python
+# ✓ OPTIMAL
+class SummaryMetadata(BaseModel):
+    total_active: int
+    total_completed: int
+    total_pending: int
+
+class EntityListResponse(BaseModel):
+    items: list[EntityResponse]
+    pagination: PaginationMetadata
+    summary: SummaryMetadata | None = None  # Optionnel
+```
+
+---
+
+### OPT-002 : Alias pour compatibilité
+
+**Règle** : Utiliser alias pour supporter plusieurs noms de champs (legacy).
+
+```python
+# ✓ OPTIMAL
+from pydantic import Field
+
+class EntityResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    
+    entity_id: UUID = Field(..., alias="id")  # Accepte "id" ou "entity_id"
+    display_name: str = Field(..., alias="name")
+```
+
+---
+
+### OPT-003 : computed_field pour champs dérivés
+
+**Règle** : Utiliser @computed_field pour champs calculés.
+
+```python
+# ✓ OPTIMAL
+from pydantic import computed_field
+
+class EntityResponse(BaseModel):
+    id: UUID
+    name: str
+    created_at: datetime
+    updated_at: datetime
+    
+    @computed_field
+    @property
+    def is_stale(self) -> bool:
+        """Entity is stale if not updated in 30 days."""
+        return (datetime.utcnow() - self.updated_at).days > 30
+```
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist réponses API** :
+
+- [ ] BaseModel Pydantic (pas dict brut)
+- [ ] Timestamps ISO 8601 avec json_encoders
+- [ ] from_attributes=True pour ORM mapping
+- [ ] Séparation Request/Response models
+- [ ] Collections wrappées (pas liste nue)
+- [ ] Field descriptions pour documentation
+- [ ] use_enum_values=True pour enums
+- [ ] Champs optionnels avec =None explicite
+- [ ] Pagination structure standardisée
+- [ ] Imbrication limitée (2-3 niveaux max)
+
+**Template BaseModel standard** :
+
+```python
+from pydantic import BaseModel, ConfigDict, Field
+from datetime import datetime
+from uuid import UUID
+
+class EntityResponse(BaseModel):
+    """Response model for entity endpoints."""
+    
+    model_config = ConfigDict(
+        from_attributes=True,
+        use_enum_values=True,
+        json_encoders={
+            datetime: lambda v: v.isoformat() if v else None
+        }
+    )
+    
+    id: UUID = Field(..., description="Unique identifier")
+    name: str = Field(..., description="Entity name")
+    status: str = Field(..., description="Current status")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+```
+
+**Commandes utiles** :
+
+```bash
+# Vérifier dict bruts
+grep -r "-> dict" app/api/routers/
+
+# Vérifier from_attributes manquant
+grep -L "from_attributes" app/api/models/**/*.py
+
+# Vérifier listes nues en response_model
+grep -r "response_model=list\[" app/
+```

@@ -1,0 +1,119 @@
+"""FastAPI entry point — Receipt v0.
+
+Scope: session ingestion + list/detail/summary APIs only. The SaaSForge
+machinery (auth, multi-tenancy, subscriptions, tracing, redis, email) is
+disabled — Receipt doesn't need it for the overnight wedge. Original
+main.py is preserved at main_saasforge.py.bak for post-v0 reactivation.
+"""
+from __future__ import annotations
+
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
+
+from apps.api.api.middlewares.metrics import (
+    RequestMetricsMiddleware,
+    render_prometheus,
+)
+from apps.api.api.middlewares.rate_limit import RateLimitMiddleware
+from apps.api.api.routers.ops_router import OpsRouter
+from apps.api.api.routers.ping_router import PingRouter
+from apps.api.core.logging import configure_logging
+from apps.api.core.request_logging import RequestLoggingMiddleware
+from apps.api.api.routers.receipt.auth_router import AuthRouter
+from apps.api.api.routers.receipt.dashboard_router import DashboardRouter
+from apps.api.api.routers.receipt.db import init_db
+from apps.api.api.routers.receipt.events_router import EventsRouter
+from apps.api.api.routers.receipt.sessions_router import SessionsRouter
+from apps.api.api.routers.receipt.summary_router import SummaryRouter
+
+
+configure_logging()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(
+    lifespan=lifespan,
+    title="Receipt API",
+    version="0.1.0-receipt",
+    description="Audit-grade session receipts for autonomous AI coding agents.",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+)
+
+_cors_origins = [
+    o.strip()
+    for o in os.environ.get(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    ).split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Rate-limit ONLY the ingest endpoint (CLI hooks can batch up to 1000 events
+# per request — runaway hooks must not hammer us). SPA reads stay unthrottled.
+app.add_middleware(RateLimitMiddleware)
+
+# Mint/propagate X-Request-ID and emit one structured JSON log per request.
+app.add_middleware(RequestLoggingMiddleware)
+
+# Outermost: in-process request counter (sees status from every layer below).
+app.add_middleware(RequestMetricsMiddleware)
+
+ping_router = PingRouter()
+ping_router.initialize_services()
+app.include_router(ping_router.get_router())
+
+events_router = EventsRouter()
+events_router.initialize_services()
+app.include_router(events_router.get_router(), prefix="/api/v1")
+
+sessions_router = SessionsRouter()
+app.include_router(sessions_router.get_router(), prefix="/api/v1")
+
+summary_router = SummaryRouter()
+summary_router.initialize_services()
+app.include_router(summary_router.get_router(), prefix="/api/v1")
+
+auth_router = AuthRouter()
+app.include_router(auth_router.get_router(), prefix="/api/v1")
+
+dashboard_router = DashboardRouter()
+app.include_router(dashboard_router.get_router(), prefix="/api/v1")
+
+ops_router = OpsRouter()
+app.include_router(ops_router.get_router())
+
+
+@app.get("/", tags=["root"])
+async def root():
+    return {
+        "message": "Receipt API",
+        "docs": "/api/docs",
+        "health": "/health",
+    }
+
+
+@app.get("/metrics", tags=["ops"])
+async def metrics() -> PlainTextResponse:
+    # PlainTextResponse appends `charset=utf-8` itself; we only specify version.
+    return PlainTextResponse(
+        content=render_prometheus(),
+        media_type="text/plain; version=0.0.4",
+    )

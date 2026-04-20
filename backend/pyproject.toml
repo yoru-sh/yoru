@@ -1,0 +1,55 @@
+[project]
+name = "overnight-saas-backend"
+version = "0.1.0"
+description = "Overnight SaaS FastAPI backend (scaffolded from SaaSForge template)."
+requires-python = ">=3.11,<3.13"
+readme = "README.md"
+
+dependencies = [
+    # --- Base (shared) ---
+    "pydantic==2.5.3",
+    "pydantic-settings==2.1.0",
+    "python-dotenv==1.0.0",
+    "email-validator==2.1.0",
+    "aiosmtplib>=2.0.0",
+    "Jinja2>=3.1.0",
+    "httpx>=0.24.0",
+    "tenacity==8.2.3",
+    # OpenTelemetry
+    "opentelemetry-api==1.21.0",
+    "opentelemetry-sdk==1.21.0",
+    "opentelemetry-instrumentation-fastapi==0.42b0",
+    "opentelemetry-instrumentation-httpx==0.42b0",
+    "opentelemetry-instrumentation-redis==0.42b0",
+    "opentelemetry-exporter-jaeger==1.21.0",
+    "opentelemetry-exporter-otlp==1.21.0",
+    # --- API service ---
+    "fastapi==0.109.0",
+    "uvicorn[standard]==0.27.0",
+    "supabase==2.7.4",
+    "redis[hiredis]==5.0.1",
+    # --- Receipt v0 storage ---
+    "sqlmodel==0.0.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["apps/api/tests"]

@@ -1,0 +1,309 @@
+---
+description: CI/CD et déploiement pour backend SaaS - agnostique projet
+alwaysApply: true
+globs:
+  - ".github/workflows/**"
+  - "Jenkinsfile"
+  - ".gitlab-ci.yml"
+---
+
+# Règles CI/CD & Déploiement
+
+## Contexte
+
+**Cible** : Pipeline CI/CD backend SaaS  
+**Audience** : DevOps et développeurs  
+**Application** : Règles contractuelles non négociables
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Pipeline obligatoire
+
+**Règle** : Tout projet doit avoir CI/CD automatisé.
+
+```
+✓ GitHub Actions
+✓ GitLab CI
+✓ Jenkins
+✓ CircleCI
+
+✗ Déploiement manuel
+```
+
+---
+
+### BLOC-002 : Stages standardisés
+
+**Règle** : Pipeline doit contenir ces stages minimum.
+
+```yaml
+stages:
+  - lint        # Linting code
+  - test        # Tests unitaires/intégration
+  - build       # Build images Docker
+  - scan        # Scan sécurité/vulnérabilités
+  - deploy      # Déploiement
+  - health      # Health check post-deploy
+  - notify      # Notification équipe
+```
+
+---
+
+### BLOC-003 : Tests bloquants
+
+**Règle** : Pipeline échoue si tests échouent.
+
+```yaml
+# ✓ FAIRE
+test:
+  script:
+    - pytest tests/
+  allow_failure: false  # Bloquant
+```
+
+---
+
+### BLOC-004 : Scan sécurité obligatoire
+
+**Règle** : Scanner images pour vulnérabilités.
+
+```yaml
+# ✓ FAIRE
+scan:
+  script:
+    - trivy image --severity HIGH,CRITICAL myapp:$TAG
+    - snyk test --severity-threshold=high
+```
+
+---
+
+### BLOC-005 : Versioning images obligatoire
+
+**Règle** : Toujours tagger images avec version.
+
+```bash
+# ✓ FAIRE
+docker build -t myapp:${GIT_SHA}
+docker build -t myapp:v1.2.3
+docker build -t myapp:${BRANCH}-${BUILD_NUMBER}
+
+# ✗ INTERDIT
+docker build -t myapp:latest  # Seulement latest
+```
+
+---
+
+### BLOC-006 : Rollback automatique
+
+**Règle** : Rollback automatique en cas d'échec health check.
+
+```yaml
+# ✓ FAIRE
+deploy:
+  script:
+    - docker-compose up -d --build
+    - sleep 15
+    - ./health_check.sh || (docker-compose down && docker-compose up -d && exit 1)
+```
+
+---
+
+### BLOC-007 : Backup avant déploiement
+
+**Règle** : Toujours sauvegarder état avant deploy.
+
+```bash
+# ✓ FAIRE
+backup:
+  script:
+    - docker-compose exec postgres pg_dump > backup_$(date +%Y%m%d_%H%M%S).sql
+    - docker commit api api:backup-$(date +%Y%m%d_%H%M%S)
+```
+
+---
+
+### BLOC-008 : Validation configuration
+
+**Règle** : Valider configs avant déploiement.
+
+```bash
+# ✓ FAIRE
+validate:
+  script:
+    - docker-compose config  # Valide syntaxe
+    - yamllint docker-compose*.yml
+```
+
+---
+
+### BLOC-009 : Notification obligatoire
+
+**Règle** : Notifier équipe du statut déploiement.
+
+```yaml
+# ✓ FAIRE
+notify:
+  script:
+    - curl -X POST https://hooks.slack.com/... -d "Deploy success"
+  when: on_success
+
+  script:
+    - curl -X POST https://hooks.slack.com/... -d "Deploy FAILED"
+  when: on_failure
+```
+
+---
+
+### BLOC-010 : Timeout pipeline
+
+**Règle** : Définir timeout pour éviter pipelines bloqués.
+
+```yaml
+# ✓ FAIRE
+pipeline:
+  timeout: 20m
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Déploiements par environnement
+
+**Règle** : Séparer pipelines dev/staging/prod.
+
+```yaml
+# ✓ PRÉFÉRÉ
+deploy_dev:
+  only: [develop]
+
+deploy_staging:
+  only: [staging]
+
+deploy_prod:
+  only: [main]
+  when: manual  # Approbation manuelle
+```
+
+---
+
+### STRONG-002 : Caching dépendances
+
+**Règle** : Cacher dépendances pour accélérer builds.
+
+```yaml
+# ✓ PRÉFÉRÉ
+cache:
+  paths:
+    - .pip-cache/
+    - node_modules/
+```
+
+---
+
+### STRONG-003 : Artifacts conservés
+
+**Règle** : Conserver artifacts de build.
+
+```yaml
+# ✓ PRÉFÉRÉ
+artifacts:
+  paths:
+    - dist/
+    - coverage/
+  expire_in: 1 week
+```
+
+---
+
+### STRONG-004 : Registry privé
+
+**Règle** : Pousser images dans registry privé.
+
+```bash
+# ✓ PRÉFÉRÉ
+docker push registry.example.com/myapp:${TAG}
+
+# ⚠ À ÉVITER
+# Images uniquement locales
+```
+
+---
+
+### STRONG-005 : Environments isolés
+
+**Règle** : Chaque environnement a ses propres ressources.
+
+```
+✓ dev.example.com
+✓ staging.example.com
+✓ prod.example.com
+
+✗ Même serveur pour tous les envs
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Blue/Green deployment
+
+**Règle** : Déployer sans downtime.
+
+---
+
+### OPT-002 : Canary releases
+
+**Règle** : Tester sur subset utilisateurs.
+
+---
+
+### OPT-003 : GitOps
+
+**Règle** : Déploiements via Git (ArgoCD, Flux).
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist CI/CD** :
+
+- [ ] Pipeline CI/CD automatisé
+- [ ] Stages standardisés (lint, test, build, scan, deploy, health, notify)
+- [ ] Tests bloquants
+- [ ] Scan sécurité (Trivy, Snyk)
+- [ ] Versioning images
+- [ ] Rollback automatique
+- [ ] Backup avant déploiement
+- [ ] Validation configuration
+- [ ] Notifications équipe
+- [ ] Timeout pipeline
+- [ ] Déploiements par environnement
+- [ ] Registry privé
+
+**Pattern pipeline Jenkins** :
+
+```groovy
+pipeline {
+    agent any
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+    }
+    stages {
+        stage('Checkout') { }
+        stage('Lint') { }
+        stage('Test') { }
+        stage('Build') { }
+        stage('Scan') { }
+        stage('Backup') { }
+        stage('Deploy') { }
+        stage('Health Check') { }
+    }
+    post {
+        success { /* notify */ }
+        failure { /* rollback + notify */ }
+    }
+}
+```

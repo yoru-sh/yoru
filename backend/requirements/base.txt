@@ -1,0 +1,22 @@
+# Base requirements shared across all services
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+email-validator==2.1.0
+
+# Email service dependencies
+aiosmtplib>=2.0.0
+Jinja2>=3.1.0
+httpx>=0.24.0
+
+# Resilience - Retry with backoff
+tenacity==8.2.3
+
+# Distributed Tracing - OpenTelemetry
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-instrumentation-httpx==0.42b0
+opentelemetry-instrumentation-redis==0.42b0
+opentelemetry-exporter-jaeger==1.21.0
+opentelemetry-exporter-otlp==1.21.0

@@ -1,0 +1,18 @@
+# API service requirements
+-r base.txt
+
+# FastAPI and server
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+
+# Supabase client
+supabase==2.7.4
+
+# Redis client
+redis[hiredis]==5.0.1
+
+# HTTP client - will be resolved by supabase dependencies
+# httpx version managed by supabase
+
+# Retry with exponential backoff (for workers)
+tenacity==8.2.3

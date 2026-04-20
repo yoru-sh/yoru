@@ -1,0 +1,48 @@
+# Production environment compose file
+# Three API replicas with nginx load balancer, SSL/TLS, production logging
+#
+# IMPORTANT: Before running in production:
+#   1. Configure SSL certificates in docker/config/nginx/ssl/
+#   2. Create secret files in docker/config/secrets/ (see secrets.example/ for templates)
+#   3. Update .env.production with your actual domain names
+#   4. Update CORS_ORIGINS in .env.production
+#
+# Secrets Management:
+#   Docker Compose secrets are used for sensitive credentials (Supabase keys, etc.)
+#   Create files in docker/config/secrets/:
+#     - supabase_url
+#     - supabase_anon_key
+#     - supabase_service_key
+#   These are mounted at /run/secrets/ in containers (read-only)
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d    # Start in detached mode
+#   docker compose -f docker-compose.prod.yml logs -f  # View logs
+#   docker compose -f docker-compose.prod.yml down     # Stop and remove containers
+#   docker compose -f docker-compose.prod.yml restart  # Restart all services
+#
+# Features:
+#   - 3 API replicas for high availability
+#   - Nginx reverse proxy with SSL termination
+#   - Production logging (LOG_LEVEL=INFO)
+#   - Log masking enabled (BLOC-008 compliance)
+#   - Strict rate limiting
+#   - Docker secrets for sensitive data
+#   - SSL/TLS with certificate management
+
+include:
+  - services/base.yml
+  - services/api.prod.yml
+  - services/worker.yml
+  - services/nginx.prod.yml
+  - services/jaeger.yml  # Optional: for distributed tracing
+
+# Docker secrets (file-based for Compose, external for Swarm)
+# Secrets are mounted read-only at /run/secrets/<secret_name>
+secrets:
+  supabase_url:
+    file: ../config/secrets/supabase_url
+  supabase_anon_key:
+    file: ../config/secrets/supabase_anon_key
+  supabase_service_key:
+    file: ../config/secrets/supabase_service_key

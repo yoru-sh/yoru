@@ -1,0 +1,429 @@
+---
+description: Contrats API - Status codes, verbes HTTP, idempotence - agnostique projet
+alwaysApply: true
+globs:
+  - "app/api/routers/**/*.py"
+  - "app/**/routers/**/*.py"
+---
+
+# Règles Contrats API
+
+## Contexte
+
+**Cible** : FastAPI REST APIs + Backend SaaS  
+**Audience** : LLM et développeurs  
+**Application** : Contrat API stable, non négociable  
+**Portée** : Agnostique au domaine métier
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Status codes appropriés obligatoires
+
+**Règle** : Utiliser les status codes HTTP standard selon l'opération.
+
+```python
+# ✓ FAIRE
+@router.get("/{id}", status_code=200)          # Implicite, lecture OK
+@router.post("", status_code=201)              # Création
+@router.post("/{id}/process", status_code=202) # Job async
+@router.delete("/{id}", status_code=204)       # Suppression, pas de body
+@router.patch("/{id}", status_code=200)        # Mise à jour
+
+# Erreurs
+raise HTTPException(status_code=400, detail="Bad Request")
+raise HTTPException(status_code=404, detail="Not Found")
+raise HTTPException(status_code=500, detail="Internal Server Error")
+```
+
+**Mapping standard obligatoire** :
+
+| Code | Usage |
+|------|-------|
+| 200 OK | GET, PATCH réussis - retourne données |
+| 201 Created | POST création - retourne ressource créée |
+| 202 Accepted | POST job async - retourne job_id |
+| 204 No Content | DELETE, opérations sans retour |
+| 400 Bad Request | Validation échouée, format invalide |
+| 401 Unauthorized | Auth manquante ou invalide |
+| 403 Forbidden | Auth OK mais permissions insuffisantes |
+| 404 Not Found | Ressource inexistante |
+| 409 Conflict | Conflit (doublon, état invalide) |
+| 422 Unprocessable Entity | Validation Pydantic échouée |
+| 429 Too Many Requests | Rate limit dépassé |
+| 500 Internal Server Error | Erreur interne non gérée |
+| 503 Service Unavailable | Service externe indisponible |
+| 504 Gateway Timeout | Timeout service externe |
+
+---
+
+### BLOC-002 : response_model obligatoire
+
+**Règle** : Tous les endpoints doivent déclarer un `response_model` Pydantic.
+
+```python
+# ✓ FAIRE
+@router.get("/{id}", response_model=EntityResponse)
+async def get_entity(entity_id: UUID) -> EntityResponse:
+    return await service.get_by_id(entity_id)
+
+@router.get("", response_model=EntityListResponse)
+async def list_entities() -> EntityListResponse:
+    return await service.list_all()
+
+# ✗ INTERDIT
+@router.get("/{id}")
+async def get_entity(entity_id: UUID):  # ✗ Pas de response_model
+    return await service.get_by_id(entity_id)
+
+@router.get("")
+async def list_entities() -> dict:  # ✗ dict brut
+    return {"items": [...]}
+```
+
+**Exception** : Endpoints retournant `StreamingResponse` ou `Response` raw.
+
+---
+
+### BLOC-003 : 202 Accepted pour jobs asynchrones
+
+**Règle** : Les opérations longues (>5s) doivent retourner 202 et un job_id immédiatement.
+
+```python
+# ✓ FAIRE
+@router.post("/{id}/process", status_code=202)
+async def process_order(
+    order_id: UUID,
+    background_tasks: BackgroundTasks
+) -> JobResponse:
+    job_id = generate_job_id()
+    background_tasks.add_task(process_task, order_id, job_id)
+    
+    return JobResponse(
+        job_id=job_id,
+        status="queued",
+        message="Processing started"
+    )
+
+# ✗ INTERDIT
+@router.post("/{id}/process")
+async def process_order(order_id: UUID):
+    result = await long_running_task(order_id)  # ✗ Bloque la requête
+    return result
+```
+
+---
+
+### BLOC-004 : Pas de 200 avec erreur dans body
+
+**Règle** : Ne jamais retourner 200 OK avec une erreur dans le body.
+
+```python
+# ✓ FAIRE
+@router.get("/{id}")
+async def get_entity(entity_id: UUID):
+    entity = await service.get_by_id(entity_id)
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return entity
+
+# ✗ INTERDIT
+@router.get("/{id}")
+async def get_entity(entity_id: UUID):
+    entity = await service.get_by_id(entity_id)
+    if not entity:
+        return {"error": "Not found", "success": False}  # ✗ 200 avec erreur
+    return {"success": True, "data": entity}
+```
+
+---
+
+### BLOC-005 : HTTPException avec detail obligatoire
+
+**Règle** : Toutes les HTTPException doivent avoir un detail explicite.
+
+```python
+# ✓ FAIRE
+raise HTTPException(
+    status_code=404,
+    detail=f"Entity {entity_id} not found"
+)
+
+raise HTTPException(
+    status_code=400,
+    detail="Invalid date format: expected YYYY-MM-DD"
+)
+
+# ✗ INTERDIT
+raise HTTPException(status_code=404)  # ✗ Pas de detail
+raise HTTPException(status_code=400, detail="Error")  # ✗ Trop vague
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Idempotence des mutations
+
+**Règle** : Les opérations POST créant des ressources doivent gérer l'idempotence.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.post("", status_code=201)
+async def create_entity(
+    data: EntityCreate,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key")
+):
+    if idempotency_key:
+        existing = await service.get_by_idempotency_key(idempotency_key)
+        if existing:
+            return existing  # ✓ Retourne existant si déjà créé
+    
+    entity = await service.create(data, idempotency_key)
+    return entity
+
+# Alternative : détection naturelle
+@router.post("/documents")
+async def import_document(url: str):
+    existing = await service.get_by_url(url)
+    if existing:
+        return existing  # ✓ Retourne document existant
+    
+    document = await service.import_document(url)
+    return document
+```
+
+---
+
+### STRONG-002 : Structure de réponse job async
+
+**Règle** : Les jobs asynchrones doivent retourner une structure standardisée.
+
+```python
+# ✓ PRÉFÉRÉ
+class JobResponse(BaseModel):
+    job_id: UUID
+    status: str  # queued, running, completed, failed
+    message: str
+    estimated_duration: int | None = None
+    queue_position: int | None = None
+
+@router.post("/{id}/process", status_code=202)
+async def process_entity(entity_id: UUID) -> JobResponse:
+    return JobResponse(
+        job_id=job_id,
+        status="queued",
+        message="Processing started",
+        estimated_duration=300,  # secondes
+        queue_position=5
+    )
+```
+
+---
+
+### STRONG-003 : Logging avant HTTPException 500
+
+**Règle** : Toujours logger avant de lever une HTTPException 500.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.get("/{id}")
+async def get_entity(request: Request, entity_id: UUID):
+    correlation_id = getattr(request.state, "correlation_id", "")
+    
+    try:
+        return await service.get_by_id(entity_id)
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.log_exception(e, {
+            "operation": "get_entity",
+            "entity_id": str(entity_id),
+            "correlation_id": correlation_id
+        })
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
+```
+
+---
+
+### STRONG-004 : PUT vs PATCH distinction
+
+**Règle** : Utiliser PATCH pour updates partiels, PUT pour remplacement complet.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.patch("/{id}")  # Update partiel
+async def update_entity(
+    entity_id: UUID,
+    data: EntityUpdate  # Tous les champs optionnels
+):
+    return await service.partial_update(entity_id, data)
+
+@router.put("/{id}")  # Remplacement complet
+async def replace_entity(
+    entity_id: UUID,
+    data: EntityCreate  # Tous les champs requis
+):
+    return await service.replace(entity_id, data)
+
+# ⚠ EN PRATIQUE : PATCH préféré systématiquement
+# PUT rarement nécessaire dans SaaS
+```
+
+---
+
+### STRONG-005 : DELETE idempotent
+
+**Règle** : DELETE doit être idempotent - retourner 204 même si déjà supprimé.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.delete("/{id}", status_code=204)
+async def delete_entity(entity_id: UUID):
+    await service.delete(entity_id)  # Ne lève pas d'erreur si inexistant
+    return Response(status_code=204)
+
+# Alternative acceptable
+@router.delete("/{id}", status_code=204)
+async def delete_entity(entity_id: UUID):
+    deleted = await service.delete(entity_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return Response(status_code=204)
+```
+
+---
+
+### STRONG-006 : Actions POST non-idempotentes explicites
+
+**Règle** : Les actions POST ayant side-effects doivent être explicitement non-idempotentes.
+
+```python
+# ✓ PRÉFÉRÉ - Actions évidemment non-idempotentes
+POST /executions/{id}/cancel    # Cancel une fois = OK
+POST /invoices/{id}/retry       # Retry peut créer nouvelle tentative
+POST /entities/{id}/notify      # Envoie notification à chaque fois
+
+# Documenter comportement
+@router.post("/{id}/notify")
+async def notify_entity(entity_id: UUID):
+    """
+    Envoie notification immédiate.
+    
+    ⚠ Non-idempotent : chaque appel envoie une nouvelle notification.
+    """
+    await service.send_notification(entity_id)
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Response headers informatifs
+
+**Règle** : Ajouter des headers informatifs dans les réponses.
+
+```python
+# ✓ OPTIMAL
+@router.post("", status_code=201)
+async def create_entity(data: EntityCreate, response: Response):
+    entity = await service.create(data)
+    
+    # Location header pour ressource créée
+    response.headers["Location"] = f"/api/v1/entities/{entity.id}"
+    
+    # Retry-After pour rate limit
+    response.headers["X-RateLimit-Remaining"] = "99"
+    response.headers["X-RateLimit-Reset"] = "1640000000"
+    
+    return entity
+```
+
+---
+
+### OPT-002 : HEAD pour existence check
+
+**Règle** : Supporter HEAD pour vérifier existence sans transférer body.
+
+```python
+# ✓ OPTIMAL
+@router.head("/{id}", status_code=200)
+async def check_entity_exists(entity_id: UUID):
+    exists = await service.exists(entity_id)
+    if not exists:
+        raise HTTPException(status_code=404)
+    return Response(status_code=200)
+
+@router.get("/{id}", status_code=200)
+async def get_entity(entity_id: UUID):
+    # HEAD automatique si non défini explicitement
+    pass
+```
+
+---
+
+### OPT-003 : 304 Not Modified pour cache
+
+**Règle** : Supporter 304 avec ETag pour réduire bande passante.
+
+```python
+# ✓ OPTIMAL
+@router.get("/{id}")
+async def get_entity(
+    entity_id: UUID,
+    if_none_match: str | None = Header(None)
+):
+    entity = await service.get_by_id(entity_id)
+    entity_etag = generate_etag(entity)
+    
+    if if_none_match == entity_etag:
+        return Response(status_code=304)
+    
+    return Response(
+        content=entity.json(),
+        headers={"ETag": entity_etag}
+    )
+```
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist contrats API** :
+
+- [ ] Status codes appropriés (201 création, 202 async, 204 delete)
+- [ ] response_model Pydantic sur tous les endpoints
+- [ ] 202 pour opérations longues (>5s)
+- [ ] Jamais 200 avec erreur dans body
+- [ ] HTTPException avec detail explicite
+- [ ] Idempotence sur POST création (Idempotency-Key)
+- [ ] Structure standardisée pour jobs async
+- [ ] Logging avant HTTPException 500
+- [ ] DELETE idempotent (204 même si inexistant)
+
+**Commandes utiles** :
+
+```bash
+# Vérifier status_code manquants
+grep -r "@router.post" app/ | grep -v "status_code="
+
+# Vérifier response_model manquants
+grep -r "@router.get" app/ | grep -v "response_model="
+grep -r "@router.post" app/ | grep -v "response_model="
+
+# Vérifier HTTPException sans detail
+grep -r "HTTPException(" app/ | grep -v "detail="
+```
+
+**Anti-patterns fréquents** :
+
+❌ POST long-running sans 202  
+❌ response_model manquant  
+❌ 200 avec `{"error": "..."}` dans body  
+❌ HTTPException sans detail  
+❌ DELETE non-idempotent  
+❌ Pas de logging avant 500

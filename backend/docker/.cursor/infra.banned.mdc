@@ -1,0 +1,204 @@
+---
+description: Patterns infrastructure absolument interdits pour backend SaaS
+alwaysApply: true
+globs:
+  - "**/Dockerfile*"
+  - "docker/**/*.yml"
+---
+
+# Patterns Infrastructure Interdits
+
+## Contexte
+
+**Cible** : Backend SaaS conteneurisé  
+**Audience** : DevOps et développeurs  
+**Application** : Liste noire non négociable
+
+---
+
+## 🔴 Liste Noire Infrastructure
+
+### Catégorie : Docker
+
+| Pattern Interdit | Raison | Alternative | Détection |
+|------------------|--------|-------------|-----------|
+| `FROM python:latest` | Version non épinglée | `FROM python:3.11-slim` | `grep "FROM.*:latest" Dockerfile` |
+| `FROM alpine` | Incompatibilités ML | `FROM python:X.XX-slim` | `grep "FROM.*alpine" Dockerfile` |
+| Run as root | Sécurité critique | `USER appuser` | `! grep "^USER" Dockerfile` |
+| Pas de HEALTHCHECK | Pas de monitoring | `HEALTHCHECK CMD curl...` | `! grep "HEALTHCHECK" Dockerfile` |
+| Secrets dans Dockerfile | Fuite secrets | Variables env | `grep -E "PASSWORD\|API_KEY" Dockerfile` |
+| Pas de .dockerignore | Image lourde | Créer .dockerignore | `! test -f .dockerignore` |
+| Cache pip conservé | Image lourde | `--no-cache-dir` | `grep "pip install" Dockerfile \| grep -v "no-cache-dir"` |
+| Pas de nettoyage APT | Image lourde | `rm -rf /var/lib/apt/lists/*` | `grep "apt-get install" \| grep -v "rm.*apt/lists"` |
+
+---
+
+### Catégorie : Docker Compose
+
+| Pattern Interdit | Raison | Alternative | Détection |
+|------------------|--------|-------------|-----------|
+| Bridge par défaut | Pas d'isolation | Réseau nommé custom | `! grep "networks:" docker-compose.yml` |
+| Ports DB exposés | Sécurité | Accès interne uniquement | `grep "5432:5432" docker-compose.yml` |
+| Secrets inline | Fuite secrets | `env_file` | `grep -i "password.*=" docker-compose.yml` |
+| Pas de healthcheck DB | Pas de dépendances | `healthcheck:` + `condition:` | `! grep "healthcheck:" docker-compose.yml` |
+| Pas de restart policy | Pas de résilience | `restart: unless-stopped` | `! grep "restart:" docker-compose.yml` |
+| Pas de rotation logs | Saturation disque | `logging: max-size:` | `! grep "max-size:" docker-compose.yml` |
+| IP hardcodées | Fragilité | Service names DNS | `grep -E "[0-9]{1,3}(\.[0-9]{1,3}){3}" docker-compose.yml` |
+| Volumes bind prod | Fragilité | Volumes nommés | `grep "\\./" docker-compose.yml` (en prod) |
+
+---
+
+### Catégorie : Secrets
+
+| Pattern Interdit | Raison | Alternative | Détection |
+|------------------|--------|-------------|-----------|
+| Secrets hardcodés | Fuite critique | env_file | `git log -p \| grep -i "password="` |
+| .env versionné | Fuite Git | .gitignore | `git ls-files \| grep "\.env$"` |
+| Secrets dans logs | Fuite logs | Masquage PII | `grep -r "password.*log" .` |
+| PASSWORD=xxx | Hardcodé | Vault externe | `grep "PASSWORD=" docker-compose.yml` |
+| API_KEY=sk-xxx | Hardcodé | Variables env | `grep "API_KEY=sk-" .` |
+
+---
+
+### Catégorie : Observabilité
+
+| Pattern Interdit | Raison | Alternative | Détection |
+|------------------|--------|-------------|-----------|
+| Pas de logs centralisés | Debug impossible | Loki/ELK | Pas de service Loki |
+| Pas de metrics | Monitoring impossible | Prometheus | Pas de service Prometheus |
+| Pas d'alerting | Incidents non détectés | Alertmanager | Pas de service Alertmanager |
+| Logs PII | Compliance RGPD | Masquage activé | `DISABLE_LOG_MASKING=true` |
+| Pas de /health | Healthchecks impossibles | Endpoint /health | `! grep "/health" app/` |
+
+---
+
+### Catégorie : CI/CD
+
+| Pattern Interdit | Raison | Alternative | Détection |
+|------------------|--------|-------------|-----------|
+| Déploiement manuel | Erreurs humaines | Pipeline CI/CD | Pas de .github/workflows/ |
+| Pas de tests | Bugs en prod | Pipeline avec tests | Pas de stage test |
+| Images :latest prod | Pas de rollback | Tags versionnés | `grep ":latest" production.yml` |
+| Pas de scan sécu | Vulnérabilités | Trivy/Snyk | Pas de stage scan |
+| Pas de backup | Perte de données | Backup avant deploy | Pas de stage backup |
+| Pas de rollback | Downtime prolongé | Rollback auto | Pas de rollback dans pipeline |
+| Pas de notifications | Équipe pas informée | Slack/Teams | Pas de notifications |
+
+---
+
+### Catégorie : Réseau
+
+| Pattern Interdit | Raison | Alternative | Détection |
+|------------------|--------|-------------|-----------|
+| Pas de reverse proxy | Exposition directe | Traefik/Nginx | Services exposent ports |
+| HTTP en prod | Sécurité | HTTPS/TLS | `entrypoint: web` sans redirect |
+| TLS < 1.2 | Vulnérabilités | TLS 1.2+ | `minVersion: VersionTLS10` |
+| CORS wildcard prod | Sécurité | Liste domaines | `allow_origins: ["*"]` en prod |
+| Pas de rate limiting | DDoS | Rate limiter | Pas de middleware ratelimit |
+| Exposé par défaut | Surface attaque | `exposedByDefault: false` | Pas de opt-in explicite |
+
+---
+
+### Catégorie : Performance
+
+| Pattern Interdit | Raison | Alternative | Détection |
+|------------------|--------|-------------|-----------|
+| Pas de multi-stage | Images lourdes | Multi-stage builds | `grep -c "FROM" Dockerfile` = 1 |
+| Pas de cache layers | Builds lents | Ordre optimal COPY | COPY après RUN pip |
+| Pas de compression | Bande passante | Gzip/Brotli | Pas de middleware compress |
+| Pas de CDN | Latence | Cloudflare/Fastly | Assets servis par app |
+| 1 worker | Pas de parallélisme | `--workers N` | `uvicorn` sans `--workers` |
+
+---
+
+## 📋 Script de Détection
+
+```bash
+#!/bin/bash
+# detect_infra_antipatterns.sh
+
+echo "🔍 Vérification patterns interdits infrastructure..."
+
+# Docker
+echo "❌ Images latest:"
+grep "FROM.*:latest" **/Dockerfile
+
+echo "❌ Containers root:"
+find . -name "Dockerfile" -exec sh -c 'grep -L "^USER" "$1"' _ {} \;
+
+echo "❌ Secrets hardcodés:"
+grep -r "PASSWORD=\|API_KEY=\|SECRET=" docker/ --include="*.yml"
+
+# Compose
+echo "❌ Pas de réseau custom:"
+grep -L "networks:" docker-compose*.yml
+
+echo "❌ Ports DB exposés:"
+grep "5432:5432\|6379:6379\|27017:27017" docker-compose*.yml
+
+echo "❌ IP hardcodées:"
+grep -E "[0-9]{1,3}(\.[0-9]{1,3}){3}" docker-compose*.yml
+
+# Secrets
+echo "❌ .env versionnés:"
+git ls-files | grep "\.env$"
+
+echo "❌ Secrets dans git history:"
+git log -p | grep -i "password=" | head -5
+
+# Observabilité
+echo "❌ Pas de Loki:"
+! grep -q "loki:" docker-compose*.yml && echo "Loki absent"
+
+echo "❌ Pas de Prometheus:"
+! grep -q "prometheus:" docker-compose*.yml && echo "Prometheus absent"
+
+# CI/CD
+echo "❌ Pas de CI:"
+! test -d .github/workflows && ! test -f Jenkinsfile && ! test -f .gitlab-ci.yml && echo "Pas de CI"
+
+echo "✅ Vérification terminée"
+```
+
+---
+
+## ⚡ Correction Rapide
+
+```bash
+# ❌ AVANT → ✅ APRÈS
+
+# Docker
+FROM python:latest → FROM python:3.11-slim
+# Pas de USER → RUN useradd -r appuser && USER appuser
+pip install ... → pip install --no-cache-dir ...
+
+# Compose
+# Pas de networks → networks: myapp_network:
+ports: "5432:5432" → # Supprimer (accès interne uniquement)
+PASSWORD=xxx → env_file: .env
+# Pas de restart → restart: unless-stopped
+
+# Secrets
+git add .env → echo ".env" >> .gitignore
+
+# Observabilité
+# Pas de Loki → Ajouter service Loki + Promtail
+
+# CI/CD
+# Déploiement manuel → Créer .github/workflows/deploy.yml
+```
+
+---
+
+## 🎯 Règles d'Or
+
+1. **Jamais de secrets en clair**
+2. **Jamais run as root**
+3. **Jamais exposer DB publiquement**
+4. **Toujours versionner images**
+5. **Toujours avoir observabilité**
+6. **Toujours avoir CI/CD**
+7. **Toujours TLS en production**
+8. **Toujours healthchecks**
+9. **Toujours backup automatique**
+10. **Toujours rotation logs**

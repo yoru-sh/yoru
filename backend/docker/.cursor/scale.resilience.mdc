@@ -1,0 +1,311 @@
+---
+description: Règles rate limiting, circuit breaker, dégradation gracieuse
+alwaysApply: true
+globs:
+  - "**/*router*.py"
+  - "**/*middleware*.py"
+  - "**/*service*.py"
+---
+
+# Résilience & Dégradation
+
+## 🔴 BLOCKING
+
+### BLOC-RES-001 : Rate limiting endpoints publics obligatoire
+
+**Règle** : Tous les endpoints publics avec rate limit
+
+**Standards** :
+- Mutation (POST/PUT/DELETE) : 100 req/min/IP
+- Lecture (GET) : 300 req/min/IP
+- Jobs longs : 10 req/min/IP
+
+**Interdit** : Endpoints sans protection
+
+---
+
+### BLOC-RES-002 : Timeout sur tous appels externes
+
+**Règle** : Jamais attendre indéfiniment
+
+**Standards** :
+- API REST : 30s
+- LLM streaming : 300s
+- DB queries : 60s
+- File upload : 600s
+
+**Jamais** : timeout=None
+
+---
+
+### BLOC-RES-003 : Retry avec backoff exponentiel
+
+**Règle** : 3 tentatives minimum appels critiques
+
+**Pattern** :
+- Tentative 1 : immédiat
+- Tentative 2 : +1s
+- Tentative 3 : +2s
+- Tentative 4 : +4s
+
+**Max attempts** : 3-5
+
+---
+
+### BLOC-RES-004 : Validation entrées stricte
+
+**Règle** : Rejeter requêtes invalides avant traitement
+
+**Validations** :
+- Pydantic models
+- Taille max uploads
+- Format données
+
+**Fail fast** : HTTP 422 immédiat
+
+---
+
+## 🟡 STRONG
+
+### STRONG-RES-001 : Circuit breaker services externes
+
+**Règle** : Stop appels si service down
+
+**États** :
+- Closed : Normal
+- Open : Échecs → Stop calls (60s)
+- Half-open : Test 1 call
+
+**Trigger** : 5 échecs consécutifs → Open
+
+---
+
+### STRONG-RES-002 : Graceful degradation
+
+**Règle** : Service dégradé plutôt que crash
+
+**Fallbacks** :
+- Cache stale si DB down
+- Résultats partiels si timeout
+- Mode lecture seule si write fail
+
+**Jamais** : Crash total si 1 dépendance fail
+
+---
+
+### STRONG-RES-003 : Limite concurrence jobs longs
+
+**Règle** : Max N jobs longs simultanés
+
+**Limite** :
+```python
+MAX_CONCURRENT_processingS = 10
+```
+
+**Mécanisme** :
+- Semaphore Redis
+- Queue avec max_concurrent
+
+**Pourquoi** : Éviter saturation CPU/RAM
+
+---
+
+### STRONG-RES-004 : Rate limiting par tenant/user
+
+**Règle** : Isolation ressources entre utilisateurs
+
+**Pattern** :
+```python
+@limiter.limit("100/minute", key=lambda: get_user_id())
+```
+
+**Quotas** : Par plan (free/pro/enterprise)
+
+---
+
+### STRONG-RES-005 : Health checks avec dépendances
+
+**Règle** : Endpoint health teste dépendances critiques
+
+**Tests** :
+- Redis ping
+- DB query simple
+- Disk space
+
+**Status 503** si dépendance critique down
+
+---
+
+### STRONG-RES-006 : Backpressure sur queues
+
+**Règle** : Rejeter nouveaux jobs si queue saturée
+
+**Limite** : Queue >1000 jobs → HTTP 429 Too Many Requests
+
+**Pourquoi** : Éviter memory exhaustion
+
+---
+
+### STRONG-RES-007 : Tool call limiting (LLM)
+
+**Règle** : Limiter appels externes par LLM
+
+**Pattern** :
+```python
+MAX_SEARCH_CALLS = 15
+MAX_SCRAPE_CALLS = 8
+```
+
+**Pourquoi** : Éviter boucles infinies + coûts
+
+---
+
+## 🟢 OPTIONAL
+
+### OPT-RES-001 : Throttling adaptatif
+
+**Règle** : Rate limit augmente si charge faible
+
+**Pattern** : Adjust limits based on CPU
+
+---
+
+### OPT-RES-002 : Fallback cache stale
+
+**Règle** : Retourner cache expiré si DB down
+
+**Quand** : Disponibilité > fraîcheur
+
+---
+
+### OPT-RES-003 : Bulkhead pattern
+
+**Règle** : Pools isolés par type opération
+
+**Exemple** :
+- Pool A : Endpoints critiques
+- Pool B : Endpoints secondaires
+
+**Pourquoi** : Isolation failures
+
+---
+
+## 📋 Anti-Patterns
+
+### ❌ Pas de rate limiting
+
+```python
+# INTERDIT
+@router.post("/processing")
+def enrich(item_id):
+    # Pas de rate limit → spam possible
+    ...
+
+# FAIRE
+@router.post("/processing")
+@limiter.limit("10/minute")
+def enrich(item_id):
+    ...
+```
+
+### ❌ Timeout infini
+
+```python
+# INTERDIT
+response = requests.get(url)  # Attend indéfiniment
+
+# FAIRE
+response = requests.get(url, timeout=30)
+```
+
+### ❌ Crash si dépendance down
+
+```python
+# INTERDIT
+data = external_api.get()  # Crash si API down
+return data
+
+# FAIRE
+try:
+    data = external_api.get()
+except ExternalAPIError:
+    return cached_fallback()
+```
+
+### ❌ Retry sans backoff
+
+```python
+# INTERDIT
+for i in range(10):
+    try:
+        return api_call()
+    except: pass  # Retry immédiat
+
+# FAIRE
+@retry(wait=exponential, stop=stop_after_attempt(3))
+def api_call():
+    ...
+```
+
+---
+
+## 🎯 Checklist
+
+- [ ] Rate limiting tous endpoints publics
+- [ ] Timeout tous appels externes
+- [ ] Retry avec backoff
+- [ ] Validation entrées stricte
+- [ ] Circuit breaker services externes
+- [ ] Graceful degradation
+- [ ] Limite concurrence jobs longs
+- [ ] Rate limiting par user
+- [ ] Health checks dépendances
+- [ ] Backpressure queues
+- [ ] Tool call limiting LLM
+
+---
+
+## 🔍 Détection
+
+```bash
+# Endpoints sans rate limit
+grep -r "@router\.(post|put|delete)" --include="*.py" | grep -v "@limiter"
+
+# Appels externes sans timeout
+grep -r "requests\.(get|post)" --include="*.py" | grep -v "timeout="
+
+# Pas de retry
+grep -r "api_call\|external" --include="*.py" | grep -v "@retry"
+
+# Pas de circuit breaker
+! grep -r "circuit.breaker\|CircuitBreaker" --include="*.py"
+```
+
+---
+
+## 📊 Quotas Standards
+
+### Par IP
+
+| Endpoint Type | Quota |
+|--------------|-------|
+| POST /jobs | 100/min |
+| GET /search | 300/min |
+| POST /processing | 10/min |
+| GET /health | Illimité |
+
+### Par User
+
+| Plan | API Calls/day | Concurrent Jobs |
+|------|--------------|-----------------|
+| Free | 1,000 | 2 |
+| Pro | 50,000 | 10 |
+| Enterprise | Illimité | 50 |
+
+---
+
+## Version
+
+**Version** : 1.0.0  
+**Date** : 2026-01-12  
+**Type** : Règles résilience

@@ -1,0 +1,8 @@
+# SSL/TLS private keys (NEVER commit these!)
+ssl/*.key
+ssl/*.pem
+ssl/*.crt
+
+# Except the README
+!ssl/README.md
+!ssl/.gitkeep

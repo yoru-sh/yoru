@@ -1,0 +1,431 @@
+---
+description: Pagination et filtrage API - Query params standardisés - agnostique projet
+alwaysApply: true
+globs:
+  - "app/api/routers/**/*.py"
+  - "app/api/models/**/*.py"
+---
+
+# Règles Pagination & Filtrage API
+
+## Contexte
+
+**Cible** : FastAPI REST APIs + Query Parameters  
+**Audience** : LLM et développeurs  
+**Application** : Contrat API stable, non négociable  
+**Portée** : Agnostique au domaine métier
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Pagination obligatoire sur collections
+
+**Règle** : Tous les endpoints listant des ressources doivent supporter la pagination.
+
+```python
+# ✓ FAIRE
+from fastapi import Query
+
+@router.get("", response_model=EntityListResponse)
+async def list_entities(
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page")
+):
+    offset = (page - 1) * page_size
+    items = await service.list(offset=offset, limit=page_size)
+    total = await service.count()
+    
+    return EntityListResponse(
+        items=items,
+        pagination=PaginationMetadata(
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=(total + page_size - 1) // page_size,
+            has_more=offset + len(items) < total
+        )
+    )
+
+# ✗ INTERDIT
+@router.get("")
+async def list_entities():
+    return await service.list_all()  # ✗ Pas de pagination
+```
+
+---
+
+### BLOC-002 : Calcul offset standardisé
+
+**Règle** : L'offset doit être calculé avec la formule `(page - 1) * limit`.
+
+```python
+# ✓ FAIRE
+offset = (page - 1) * page_size  # page=1 → offset=0, page=2 → offset=50
+
+# ✗ INTERDIT
+offset = page * page_size  # ✗ page=1 → offset=50 (saute première page)
+```
+
+---
+
+### BLOC-003 : Limite maximum obligatoire
+
+**Règle** : Le page_size doit avoir une limite maximum (200 recommandé).
+
+```python
+# ✓ FAIRE
+page_size: int = Query(50, ge=1, le=200, description="Items per page (max 200)")
+
+# ✗ INTERDIT
+page_size: int = Query(50, ge=1)  # ✗ Pas de limite max
+```
+
+**Rationale** : Évite les requêtes trop lourdes qui saturent la DB/API.
+
+---
+
+### BLOC-004 : Structure pagination cohérente
+
+**Règle** : Toutes les réponses paginées doivent utiliser la même structure.
+
+```python
+# ✓ FAIRE
+class PaginationMetadata(BaseModel):
+    total: int = Field(..., description="Total items count")
+    page: int = Field(..., ge=1, description="Current page (1-indexed)")
+    page_size: int = Field(..., description="Items per page")
+    total_pages: int = Field(..., description="Total pages")
+    has_more: bool = Field(..., description="Has next page")
+
+class EntityListResponse(BaseModel):
+    items: list[EntityResponse]
+    pagination: PaginationMetadata
+
+# ✗ INTERDIT - Structures incohérentes
+class EntityListResponse(BaseModel):
+    items: list[EntityResponse]
+    total: int
+    page: int
+
+class OrderListResponse(BaseModel):
+    orders: list[OrderResponse]
+    count: int  # ✗ Nom différent
+    current_page: int  # ✗ Nom différent
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : page 1-indexed
+
+**Règle** : Les pages doivent commencer à 1, pas 0.
+
+```python
+# ✓ PRÉFÉRÉ
+page: int = Query(1, ge=1)  # page=1 est la première page
+
+# ⚠ ALTERNATIVE (moins idiomatique)
+page: int = Query(0, ge=0)  # page=0 première page (style programmeur)
+```
+
+**Rationale** : 1-indexed est plus naturel pour utilisateurs non techniques.
+
+---
+
+### STRONG-002 : Tri standardisé
+
+**Règle** : Supporter sort_by et sort_order de façon cohérente.
+
+```python
+# ✓ PRÉFÉRÉ
+from enum import Enum
+
+class SortOrder(str, Enum):
+    ASC = "asc"
+    DESC = "desc"
+
+@router.get("")
+async def list_entities(
+    sort_by: str = Query("created_at", description="Field to sort by"),
+    sort_order: SortOrder = Query(SortOrder.DESC, description="Sort order")
+):
+    return await service.list(sort_by=sort_by, sort_order=sort_order.value)
+```
+
+---
+
+### STRONG-003 : Filtres via Query params
+
+**Règle** : Les filtres doivent être des Query parameters optionnels.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.get("")
+async def list_entities(
+    status: str | None = Query(None, description="Filter by status"),
+    created_after: datetime | None = Query(None, description="Filter by creation date"),
+    owner_id: UUID | None = Query(None, description="Filter by owner")
+):
+    filters = {}
+    if status:
+        filters["status"] = status
+    if created_after:
+        filters["created_at__gte"] = created_after
+    if owner_id:
+        filters["owner_id"] = owner_id
+    
+    return await service.list(filters=filters)
+```
+
+---
+
+### STRONG-004 : has_more pour UX
+
+**Règle** : Inclure has_more pour indiquer s'il reste des pages.
+
+```python
+# ✓ PRÉFÉRÉ
+class PaginationMetadata(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    has_more: bool  # ✓ Utile pour infinite scroll
+
+# Calcul
+has_more = page < total_pages
+# ou
+has_more = offset + len(items) < total
+```
+
+---
+
+### STRONG-005 : Validation des valeurs de tri
+
+**Règle** : Valider que sort_by correspond à un champ existant.
+
+```python
+# ✓ PRÉFÉRÉ
+ALLOWED_SORT_FIELDS = ["created_at", "updated_at", "name", "status"]
+
+@router.get("")
+async def list_entities(
+    sort_by: str = Query("created_at")
+):
+    if sort_by not in ALLOWED_SORT_FIELDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid sort field. Allowed: {', '.join(ALLOWED_SORT_FIELDS)}"
+        )
+    
+    return await service.list(sort_by=sort_by)
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Cursor-based pagination pour grandes collections
+
+**Règle** : Envisager cursor pagination pour datasets >100k items.
+
+```python
+# ✓ OPTIMAL pour très grandes collections
+@router.get("/entities")
+async def list_entities(
+    cursor: str | None = Query(None, description="Cursor for next page"),
+    limit: int = Query(50, ge=1, le=200)
+):
+    items, next_cursor = await service.list_cursor(cursor=cursor, limit=limit)
+    
+    return {
+        "items": items,
+        "next_cursor": next_cursor,
+        "has_more": next_cursor is not None
+    }
+
+# Avantages :
+# - Performance constante (pas d'offset élevé)
+# - Pas de "page drift" lors d'insertions concurrentes
+```
+
+---
+
+### OPT-002 : Recherche full-text séparée
+
+**Règle** : Créer un endpoint /search dédié pour recherche full-text.
+
+```python
+# ✓ OPTIMAL
+@router.post("/search", response_model=SearchResponse)
+async def search_entities(request: SearchRequest):
+    """
+    Full-text search avec filtres avancés.
+    
+    Distinct de GET /entities qui est pour listing simple.
+    """
+    return await search_service.search(
+        query=request.query,
+        filters=request.filters,
+        limit=request.limit
+    )
+```
+
+---
+
+### OPT-003 : Count query optimisé
+
+**Règle** : Éviter COUNT(*) systématique si pagination cursor.
+
+```python
+# ✓ OPTIMAL - Count conditionnel
+@router.get("")
+async def list_entities(
+    include_total: bool = Query(False, description="Include total count (slower)")
+):
+    items = await service.list(limit=page_size)
+    
+    total = None
+    if include_total:
+        total = await service.count()  # Coûteux, optionnel
+    
+    return {
+        "items": items,
+        "total": total
+    }
+```
+
+---
+
+### OPT-004 : Range filters pour dates
+
+**Règle** : Supporter start_date/end_date pour filtres temporels.
+
+```python
+# ✓ OPTIMAL
+@router.get("")
+async def list_entities(
+    start_date: date | None = Query(None, description="Filter from date (YYYY-MM-DD)"),
+    end_date: date | None = Query(None, description="Filter to date (YYYY-MM-DD)")
+):
+    filters = {}
+    if start_date:
+        filters["created_at__gte"] = datetime.combine(start_date, datetime.min.time())
+    if end_date:
+        filters["created_at__lte"] = datetime.combine(end_date, datetime.max.time())
+    
+    return await service.list(filters=filters)
+```
+
+---
+
+### OPT-005 : Metadata summary dans réponse
+
+**Règle** : Ajouter summary optionnel pour agrégations rapides.
+
+```python
+# ✓ OPTIMAL
+class EntityListResponse(BaseModel):
+    items: list[EntityResponse]
+    pagination: PaginationMetadata
+    summary: SummaryMetadata | None = None
+
+class SummaryMetadata(BaseModel):
+    total_active: int
+    total_completed: int
+    total_pending: int
+
+@router.get("")
+async def list_entities(
+    include_summary: bool = Query(False)
+):
+    items = await service.list()
+    
+    summary = None
+    if include_summary:
+        summary = await service.get_summary()
+    
+    return EntityListResponse(
+        items=items,
+        pagination=...,
+        summary=summary
+    )
+```
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist pagination API** :
+
+- [ ] Pagination sur tous les endpoints de listing
+- [ ] page 1-indexed, page_size avec max (200)
+- [ ] Offset calculé avec `(page - 1) * page_size`
+- [ ] Structure pagination cohérente (total, page, page_size, total_pages, has_more)
+- [ ] Sort_by et sort_order supportés
+- [ ] Filtres optionnels via Query params
+- [ ] Validation des champs de tri
+- [ ] has_more pour UX
+- [ ] Documentation Query params (descriptions)
+
+**Template pagination standard** :
+
+```python
+from fastapi import Query
+from pydantic import BaseModel, Field
+
+class PaginationMetadata(BaseModel):
+    total: int = Field(..., description="Total items")
+    page: int = Field(..., ge=1, description="Current page")
+    page_size: int = Field(..., description="Items per page")
+    total_pages: int = Field(..., description="Total pages")
+    has_more: bool = Field(..., description="Has next page")
+
+class EntityListResponse(BaseModel):
+    items: list[EntityResponse]
+    pagination: PaginationMetadata
+
+@router.get("", response_model=EntityListResponse)
+async def list_entities(
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=200, description="Items per page"),
+    sort_by: str = Query("created_at", description="Sort field"),
+    sort_order: str = Query("desc", description="Sort order: asc, desc"),
+    status: str | None = Query(None, description="Filter by status")
+):
+    offset = (page - 1) * page_size
+    
+    items = await service.list(
+        offset=offset,
+        limit=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        filters={"status": status} if status else {}
+    )
+    
+    total = await service.count(filters={"status": status} if status else {})
+    total_pages = (total + page_size - 1) // page_size
+    
+    return EntityListResponse(
+        items=items,
+        pagination=PaginationMetadata(
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+            has_more=page < total_pages
+        )
+    )
+```
+
+**Commandes utiles** :
+
+```bash
+# Vérifier endpoints sans pagination
+grep -r "@router.get.*list" app/ -A 10 | grep -v "page:"
+
+# Vérifier limites manquantes
+grep -r "page_size.*Query" app/ | grep -v "le="
+```

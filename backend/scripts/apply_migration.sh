@@ -1,0 +1,22 @@
+#!/bin/bash
+# Script to apply subscription schema migration to Supabase
+
+echo "🚀 Applying Subscription System Migration to Supabase"
+echo "======================================================"
+echo ""
+echo "📝 Please follow these steps:"
+echo ""
+echo "1. Go to your Supabase project dashboard:"
+echo "   https://supabase.com/dashboard/project/forge-test-saas"
+echo ""
+echo "2. Click on 'SQL Editor' in the left sidebar"
+echo ""
+echo "3. Copy the SQL migration file:"
+echo "   Location: /Users/loicmancino/SaaSForge/template/migrations/subscriptions_schema.sql"
+echo ""
+echo "4. Paste and execute the SQL in the editor"
+echo ""
+echo "✅ Once done, run the seed script:"
+echo "   cd /Users/loicmancino/SaaSForge/template"
+echo "   python3 scripts/seed_subscriptions.py"
+echo ""

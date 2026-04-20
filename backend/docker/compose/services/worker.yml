@@ -1,0 +1,53 @@
+# Worker services for SaaS stack
+# Background job processors
+
+services:
+  webhook_worker:
+    build:
+      context: ../../..
+      dockerfile: docker/image/api/Dockerfile  # Same image as API
+    container_name: saas_webhook_worker
+    restart: unless-stopped
+    command: python -m apps.worker.webhook.worker
+    env_file:
+      - ../../config/env/.env.shared
+      - ../../config/env/.env.api
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - saas_network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  heartbeat_worker:
+    build:
+      context: ../../..
+      dockerfile: docker/image/api/Dockerfile  # Same image as API
+    container_name: saas_heartbeat_worker
+    restart: unless-stopped
+    command: python -m apps.worker.heartbeat.worker
+    env_file:
+      - ../../config/env/.env.shared
+      - ../../config/env/.env.api
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - saas_network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

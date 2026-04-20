@@ -1,0 +1,21 @@
+# Development environment compose file
+# Single API instance with direct port access, debug logging, no SSL
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up
+#   docker compose -f docker-compose.dev.yml up -d  # Detached mode
+#   docker compose -f docker-compose.dev.yml down   # Stop and remove containers
+#
+# Features:
+#   - Single API instance (no replicas)
+#   - Direct port access on 8002 (no nginx)
+#   - Debug logging (LOG_LEVEL=DEBUG)
+#   - Log masking disabled
+#   - Relaxed rate limiting
+#   - .env files for secrets
+
+include:
+  - services/base.yml
+  - services/api.dev.yml
+  - services/worker.yml
+  - services/jaeger.yml  # Optional: for tracing in development

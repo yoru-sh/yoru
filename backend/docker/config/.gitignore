@@ -1,0 +1,6 @@
+# Docker secrets directory (contains sensitive credentials)
+# NEVER commit actual secrets to git!
+secrets/
+
+# But keep the example templates
+!secrets.example/

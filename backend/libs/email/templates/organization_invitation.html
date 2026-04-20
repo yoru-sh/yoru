@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Join {{ org_name }} on {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h2>You've been invited to join {{ org_name }}</h2>
+
+<p>Hi there,</p>
+
+<p>
+    <strong>{{ inviter_name }}</strong> has invited you to join
+    <strong>{{ org_name }}</strong> on {{ brand_name }}
+    {% if role %}
+    as a <strong>{{ role }}</strong>
+    {% endif %}.
+</p>
+
+<div class="info-box">
+    <p><strong>Organization:</strong> {{ org_name }}</p>
+    {% if role %}
+    <p><strong>Your role:</strong> {{ role }}</p>
+    {% endif %}
+</div>
+
+<p>Click the button below to accept the invitation:</p>
+
+<a href="{{ invite_url }}" class="button">Accept Invitation</a>
+
+<p style="font-size: 14px; color: #6b7280;">
+    Or copy and paste this link into your browser:<br>
+    <a href="{{ invite_url }}" style="color: #4F46E5;">{{ invite_url }}</a>
+</p>
+
+<p>If you don't have an account yet, you'll be able to create one when you accept the invitation.</p>
+
+<p>Looking forward to having you on the team!</p>
+{% endblock %}

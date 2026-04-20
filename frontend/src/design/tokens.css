@@ -1,0 +1,50 @@
+/* ---- Receipt design tokens ----
+   Theme: `<html class="dark">` is the product default (warm-terminal receipt).
+   Removing `.dark` reveals the cream-paper light-mode palette (respects
+   prefers-color-scheme + manual toggle — wired in index.html).
+
+   RGB triplets so Tailwind's `rgb(var(--token) / <alpha-value>)` opacity
+   modifiers work end-to-end.
+------------------------------- */
+
+:root {
+  /* Light — cream paper under a warm desk lamp */
+  --bg-page:      250 247 242;  /* #faf7f2 */
+  --bg-surface:   255 253 249;  /* #fffdf9 */
+  --bg-sunken:    242 236 224;  /* #f2ece0 */
+  --rule:         212 200 178;  /* #d4c8b2 — receipt perforation */
+  --ink-primary:  31 26 20;     /* #1f1a14 warm near-black */
+  --ink-muted:    92 82 66;     /* #5c5242 */
+  --ink-faint:    140 128 108;  /* #8c806c */
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --ease-out:   cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-micro:  120ms;
+  --dur-base:   200ms;
+  --dur-entry:  320ms;
+
+  --radius-sm:  2px;   /* receipts have square corners */
+  --radius-md:  4px;
+  --radius-lg:  6px;
+}
+
+.dark {
+  /* Dark (default) — receipt under dim terminal light */
+  --bg-page:      15 13 12;     /* #0f0d0c warm near-black */
+  --bg-surface:   23 20 15;     /* #17140f */
+  --bg-sunken:    10 8 7;       /* #0a0807 */
+  --rule:         51 44 36;     /* #332c24 */
+  --ink-primary:  243 238 226;  /* #f3eee2 warm off-white */
+  --ink-muted:    170 158 138;  /* #aa9e8a */
+  --ink-faint:    113 101 82;   /* #716552 */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-micro: 0ms;
+    --dur-base:  0ms;
+    --dur-entry: 0ms;
+  }
+}

@@ -1,0 +1,2 @@
+# This file ensures the ssl directory is tracked by git
+# SSL certificate files (*.crt, *.key) are gitignored for security

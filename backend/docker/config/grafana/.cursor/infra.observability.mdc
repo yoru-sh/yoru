@@ -1,0 +1,302 @@
+---
+description: Observabilité et monitoring pour backend SaaS - agnostique projet
+alwaysApply: true
+globs:
+  - "docker/compose/**/*observability*.yml"
+  - "docker/compose/**/*monitoring*.yml"
+---
+
+# Règles Observabilité & Monitoring
+
+## Contexte
+
+**Cible** : Backend SaaS avec observabilité complète  
+**Audience** : DevOps et SRE  
+**Application** : Règles contractuelles non négociables
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Stack complète logs + metrics + traces
+
+**Règle** : Implémenter les 3 piliers d'observabilité.
+
+```
+✓ Logs → Promtail → Loki → Grafana
+✓ Metrics → Exporters → Prometheus → Grafana
+✓ Traces → OpenTelemetry → Jaeger → Grafana (optionnel mais fortement recommandé)
+```
+
+---
+
+### BLOC-002 : Logs centralisés obligatoires
+
+**Règle** : Jamais de logs locaux uniquement.
+
+```yaml
+# ✓ FAIRE
+loki:
+  image: grafana/loki:latest
+
+promtail:
+  image: grafana/promtail:latest
+  volumes:
+    - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
+# ✗ INTERDIT
+# Logs stdout uniquement sans agrégation
+```
+
+---
+
+### BLOC-003 : Rétention logs minimum 7 jours
+
+**Règle** : Conserver logs au moins 7 jours en production.
+
+```yaml
+# ✓ FAIRE
+loki:
+  command:
+    - -config.file=/etc/loki/config.yml
+  # config.yml
+  limits_config:
+    retention_period: 168h  # 7 jours minimum
+```
+
+---
+
+### BLOC-004 : Healthcheck endpoints obligatoires
+
+**Règle** : Tous les services doivent exposer `/health`.
+
+```python
+# ✓ FAIRE
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "timestamp": datetime.now()}
+```
+
+---
+
+### BLOC-005 : Metrics Prometheus obligatoires
+
+**Règle** : Exposer métriques système minimum.
+
+```yaml
+# ✓ FAIRE (minimum requis)
+services:
+  node_exporter:      # Métriques système
+  cadvisor:           # Métriques containers
+  redis_exporter:     # Métriques Redis
+  postgres_exporter:  # Métriques PostgreSQL
+```
+
+---
+
+### BLOC-006 : Alerting configuré
+
+**Règle** : Définir alertes pour métriques critiques.
+
+```yaml
+# ✓ FAIRE
+groups:
+  - name: critical
+    rules:
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+      - alert: ServiceDown
+        expr: up == 0
+      - alert: DiskSpaceLow
+        expr: node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1
+```
+
+---
+
+### BLOC-007 : Rotation logs Docker obligatoire
+
+**Règle** : Configurer rotation pour tous les services.
+
+```yaml
+# ✓ FAIRE
+services:
+  api:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+---
+
+### BLOC-008 : Pas de logs sensibles
+
+**Règle** : Activer masquage PII obligatoirement.
+
+```python
+# ✓ FAIRE
+DISABLE_LOG_MASKING=false  # Production
+
+# ✗ INTERDIT
+DISABLE_LOG_MASKING=true  # En production
+```
+
+---
+
+### BLOC-009 : Dashboards Grafana pour chaque service
+
+**Règle** : Créer dashboards monitoring par service.
+
+```
+✓ Dashboard API (requests, latency, errors)
+✓ Dashboard Workers (queue depth, processing time)
+✓ Dashboard Infrastructure (CPU, RAM, disk, network)
+✓ Dashboard Database (connections, queries, slow queries)
+```
+
+---
+
+### BLOC-010 : Tracing distribué pour flux complexes
+
+**Règle** : Activer tracing sur services avec appels externes multiples.
+
+```python
+# ✓ FAIRE
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
+
+with tracer.start_as_current_span("process_request"):
+    # Opération tracée
+    result = await external_api_call()
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : SLI/SLO définis
+
+**Règle** : Définir Service Level Indicators et Objectives.
+
+```yaml
+# ✓ PRÉFÉRÉ
+SLO:
+  availability: 99.9%  # 43 min downtime/mois
+  latency_p95: 500ms
+  error_rate: < 1%
+```
+
+---
+
+### STRONG-002 : Log sampling pour volumétrie élevée
+
+**Règle** : Échantillonner logs non critiques.
+
+```python
+# ✓ PRÉFÉRÉ
+if request_count % 100 == 0:  # Sample 1/100
+    logger.log_debug("Processing item", context)
+```
+
+---
+
+### STRONG-003 : Corrélation ID propagé
+
+**Règle** : Tracer requêtes avec correlation_id.
+
+```python
+# ✓ PRÉFÉRÉ (déjà dans python.logging.rules.md)
+# Ne pas répéter, référencer les règles Python
+```
+
+---
+
+### STRONG-004 : Métriques custom métier
+
+**Règle** : Exposer métriques applicatives.
+
+```python
+# ✓ PRÉFÉRÉ
+from prometheus_client import Counter, Histogram
+
+requests_total = Counter('app_requests_total', 'Total requests')
+request_duration = Histogram('app_request_duration_seconds', 'Request duration')
+```
+
+---
+
+### STRONG-005 : Notification multi-canal
+
+**Règle** : Alertes via plusieurs canaux.
+
+```yaml
+# ✓ PRÉFÉRÉ
+alertmanager:
+  receivers:
+    - name: team
+      slack_configs:
+        - channel: '#alerts'
+      pagerduty_configs:
+        - service_key: xxx
+      email_configs:
+        - to: 'team@example.com'
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : APM externe
+
+**Règle** : Considérer APM managé (Datadog, New Relic).
+
+---
+
+### OPT-002 : Log enrichment
+
+**Règle** : Enrichir logs avec metadata contextuelles.
+
+---
+
+### OPT-003 : Chaos engineering
+
+**Règle** : Tester résilience avec Chaos Monkey.
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist Observabilité** :
+
+- [ ] Stack logs (Loki + Promtail + Grafana)
+- [ ] Stack metrics (Prometheus + exporters + Grafana)
+- [ ] Rétention logs >= 7 jours
+- [ ] `/health` endpoints partout
+- [ ] Exporters système (node, cadvisor, redis, postgres)
+- [ ] Alertes configurées
+- [ ] Rotation logs Docker
+- [ ] Masquage PII activé
+- [ ] Dashboards Grafana
+- [ ] Tracing distribué
+- [ ] SLI/SLO définis
+
+**Commandes** :
+
+```bash
+# Vérifier stack Loki
+curl http://localhost:3100/ready
+
+# Vérifier Prometheus targets
+curl http://localhost:9090/api/v1/targets
+
+# Tester alerte
+curl -XPOST http://localhost:9093/api/v1/alerts
+
+# Logs d'un service
+docker-compose logs -f --tail=100 api
+
+# Métriques d'un exporter
+curl http://localhost:9100/metrics  # node_exporter
+```

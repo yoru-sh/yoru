@@ -1,0 +1,488 @@
+---
+description: Gestion des erreurs API - HTTPException, error responses - agnostique projet
+alwaysApply: true
+globs:
+  - "app/api/routers/**/*.py"
+  - "app/api/exceptions/**/*.py"
+---
+
+# Règles Gestion des Erreurs API
+
+## Contexte
+
+**Cible** : FastAPI REST APIs + Error Handling  
+**Audience** : LLM et développeurs  
+**Application** : Contrat API stable, non négociable  
+**Portée** : Agnostique au domaine métier
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Mapping exception → status code obligatoire
+
+**Règle** : Les exceptions métier doivent être converties en HTTPException avec status code approprié.
+
+```python
+# ✓ FAIRE
+from app.api.exceptions import NotFoundError, ValidationError, PermissionError
+from fastapi import HTTPException
+
+@router.get("/{entity_id}")
+async def get_entity(entity_id: UUID):
+    try:
+        return await service.get_by_id(entity_id)
+    
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=e.message)
+    
+    except InfrastructureError as e:
+        logger.log_exception(e, {"operation": "get_entity"})
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+    
+    except Exception as e:
+        logger.log_exception(e, {"operation": "get_entity"})
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# ✗ INTERDIT
+@router.get("/{entity_id}")
+async def get_entity(entity_id: UUID):
+    return await service.get_by_id(entity_id)  # ✗ Pas de gestion d'erreur
+```
+
+**Mapping standard** :
+
+| Exception | Status Code |
+|-----------|-------------|
+| NotFoundError | 404 |
+| ValidationError | 400 |
+| BusinessRuleError | 400 |
+| PermissionError | 403 |
+| ConflictError | 409 |
+| InfrastructureError | 503 |
+| TimeoutError | 504 |
+| Exception (catch-all) | 500 |
+
+---
+
+### BLOC-002 : Logging avant 500/503
+
+**Règle** : Toujours logger avant de retourner 500 ou 503.
+
+```python
+# ✓ FAIRE
+@router.post("/{id}/process")
+async def process_entity(request: Request, entity_id: UUID):
+    correlation_id = getattr(request.state, "correlation_id", "")
+    
+    try:
+        return await service.process(entity_id)
+    except Exception as e:
+        logger.log_exception(e, {
+            "operation": "process_entity",
+            "entity_id": str(entity_id),
+            "correlation_id": correlation_id
+        })
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+# ✗ INTERDIT
+@router.post("/{id}/process")
+async def process_entity(entity_id: UUID):
+    try:
+        return await service.process(entity_id)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Error")  # ✗ Pas de log
+```
+
+---
+
+### BLOC-003 : detail explicite obligatoire
+
+**Règle** : HTTPException doit toujours avoir un detail descriptif.
+
+```python
+# ✓ FAIRE
+raise HTTPException(
+    status_code=404,
+    detail=f"Entity {entity_id} not found"
+)
+
+raise HTTPException(
+    status_code=400,
+    detail="Invalid date format: expected YYYY-MM-DD, got 01/12/2026"
+)
+
+# ✗ INTERDIT
+raise HTTPException(status_code=404)  # ✗ Pas de detail
+raise HTTPException(status_code=400, detail="Error")  # ✗ Trop vague
+raise HTTPException(status_code=400, detail="Bad request")  # ✗ Générique
+```
+
+---
+
+### BLOC-004 : Pas de stack trace en production
+
+**Règle** : Ne jamais exposer stack traces dans les réponses d'erreur en production.
+
+```python
+# ✓ FAIRE
+try:
+    result = await service.process(data)
+except Exception as e:
+    logger.log_exception(e, {"operation": "process"})  # ✓ Log interne
+    raise HTTPException(
+        status_code=500,
+        detail="Internal server error"  # ✓ Message générique
+    )
+
+# ✗ INTERDIT
+try:
+    result = await service.process(data)
+except Exception as e:
+    raise HTTPException(
+        status_code=500,
+        detail=str(e)  # ✗ Peut contenir stack trace/secrets
+    )
+```
+
+---
+
+### BLOC-005 : 400 vs 422 distinction
+
+**Règle** : 400 pour erreurs métier, 422 pour erreurs de validation Pydantic.
+
+```python
+# ✓ FAIRE
+# 422 : Pydantic validation automatique
+@router.post("", status_code=201)
+async def create_entity(data: EntityCreate):  # ✗ name manquant → 422
+    pass
+
+# 400 : Validation métier
+@router.post("")
+async def create_entity(data: EntityCreate):
+    if await service.exists_by_name(data.name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Entity with name '{data.name}' already exists"
+        )
+    return await service.create(data)
+
+# FastAPI gère automatiquement 422 pour validation Pydantic
+# Utiliser 400 pour business rules
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Exception handler global
+
+**Règle** : Définir un exception handler global pour catch-all.
+
+```python
+# ✓ PRÉFÉRÉ
+# app/main.py
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    correlation_id = getattr(request.state, "correlation_id", "")
+    
+    logger.log_exception(exc, {
+        "path": request.url.path,
+        "method": request.method,
+        "correlation_id": correlation_id
+    })
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "correlation_id": correlation_id
+        }
+    )
+```
+
+---
+
+### STRONG-002 : Structure d'erreur avec correlation_id
+
+**Règle** : Inclure correlation_id dans les réponses d'erreur.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.get("/{id}")
+async def get_entity(request: Request, entity_id: UUID):
+    correlation_id = getattr(request.state, "correlation_id", "")
+    
+    try:
+        return await service.get_by_id(entity_id)
+    except NotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Entity {entity_id} not found",
+            headers={"X-Correlation-ID": correlation_id}
+        )
+```
+
+---
+
+### STRONG-003 : Messages user-friendly
+
+**Règle** : Messages d'erreur doivent être compréhensibles par utilisateurs finaux.
+
+```python
+# ✓ PRÉFÉRÉ
+raise HTTPException(
+    status_code=400,
+    detail="Username must be between 3 and 20 characters"
+)
+
+raise HTTPException(
+    status_code=409,
+    detail="This email address is already registered"
+)
+
+# ⚠ MOINS BON - Trop technique
+raise HTTPException(
+    status_code=400,
+    detail="Constraint violation: users_email_key"
+)
+```
+
+---
+
+### STRONG-004 : Pas de details sensibles en 400
+
+**Règle** : Ne pas exposer d'informations sensibles dans erreurs 400.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.post("/auth/login")
+async def login(credentials: LoginRequest):
+    user = await auth_service.authenticate(credentials)
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"  # ✓ Générique
+        )
+    return {"token": generate_token(user)}
+
+# ✗ INTERDIT
+@router.post("/auth/login")
+async def login(credentials: LoginRequest):
+    user = await auth_service.get_by_email(credentials.email)
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="User not found"  # ✗ Révèle que l'email n'existe pas
+        )
+    if not verify_password(credentials.password, user.password_hash):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid password"  # ✗ Révèle que l'email existe
+        )
+```
+
+---
+
+### STRONG-005 : 429 avec Retry-After header
+
+**Règle** : Rate limit errors doivent inclure Retry-After.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.post("/entities")
+async def create_entity(request: Request, data: EntityCreate):
+    if await rate_limiter.is_exceeded(request):
+        retry_after = await rate_limiter.get_retry_after(request)
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after)}
+        )
+    return await service.create(data)
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Structure d'erreur JSON standardisée
+
+**Règle** : Utiliser une structure d'erreur cohérente avec error_code.
+
+```python
+# ✓ OPTIMAL
+class ErrorResponse(BaseModel):
+    error_code: str
+    message: str
+    details: dict | None = None
+    correlation_id: str | None = None
+
+@app.exception_handler(NotFoundError)
+async def not_found_handler(request: Request, exc: NotFoundError):
+    return JSONResponse(
+        status_code=404,
+        content=ErrorResponse(
+            error_code="ENTITY_NOT_FOUND",
+            message=exc.message,
+            correlation_id=exc.correlation_id
+        ).model_dump()
+    )
+
+# Exemple réponse
+{
+    "error_code": "ENTITY_NOT_FOUND",
+    "message": "Entity abc-123 not found",
+    "correlation_id": "req-xyz-789"
+}
+```
+
+---
+
+### OPT-002 : Validation errors structurés
+
+**Règle** : Formatter les erreurs de validation Pydantic de façon lisible.
+
+```python
+# ✓ OPTIMAL
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for error in exc.errors():
+        errors.append({
+            "field": ".".join(str(x) for x in error["loc"][1:]),
+            "message": error["msg"],
+            "type": error["type"]
+        })
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error_code": "VALIDATION_ERROR",
+            "message": "Request validation failed",
+            "errors": errors
+        }
+    )
+
+# Exemple réponse
+{
+    "error_code": "VALIDATION_ERROR",
+    "message": "Request validation failed",
+    "errors": [
+        {
+            "field": "name",
+            "message": "field required",
+            "type": "value_error.missing"
+        }
+    ]
+}
+```
+
+---
+
+### OPT-003 : Documentation erreurs dans OpenAPI
+
+**Règle** : Documenter les erreurs possibles dans responses OpenAPI.
+
+```python
+# ✓ OPTIMAL
+@router.get(
+    "/{entity_id}",
+    response_model=EntityResponse,
+    responses={
+        404: {"description": "Entity not found"},
+        403: {"description": "Permission denied"},
+        500: {"description": "Internal server error"}
+    }
+)
+async def get_entity(entity_id: UUID):
+    pass
+```
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist erreurs API** :
+
+- [ ] Try-except sur toutes les opérations métier
+- [ ] Mapping exception → status code approprié
+- [ ] Logging avant 500/503
+- [ ] detail explicite et user-friendly
+- [ ] Pas de stack trace en production
+- [ ] correlation_id dans headers/body erreur
+- [ ] 400 vs 422 distinction (métier vs validation)
+- [ ] Pas de détails sensibles dans erreurs
+- [ ] 429 avec Retry-After header
+- [ ] Exception handler global
+
+**Commandes utiles** :
+
+```bash
+# Vérifier endpoints sans gestion d'erreur
+grep -r "@router\." app/api/routers/ | grep -v "try:"
+
+# Vérifier HTTPException sans detail
+grep -r "HTTPException(" app/ | grep -v "detail="
+
+# Vérifier logging avant 500
+grep -r "status_code=500" app/ -A 2 | grep -v "log_exception"
+```
+
+**Template gestion d'erreur** :
+
+```python
+@router.get("/{entity_id}")
+async def get_entity(request: Request, entity_id: UUID):
+    correlation_id = getattr(request.state, "correlation_id", "")
+    
+    try:
+        return await service.get_by_id(entity_id)
+    
+    except NotFoundError as e:
+        raise HTTPException(status_code=404, detail=e.message)
+    
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=e.message)
+    
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=e.message)
+    
+    except InfrastructureError as e:
+        logger.log_exception(e, {
+            "operation": "get_entity",
+            "entity_id": str(entity_id),
+            "correlation_id": correlation_id
+        })
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily unavailable",
+            headers={"X-Correlation-ID": correlation_id}
+        )
+    
+    except Exception as e:
+        logger.log_exception(e, {
+            "operation": "get_entity",
+            "correlation_id": correlation_id
+        })
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error",
+            headers={"X-Correlation-ID": correlation_id}
+        )
+```

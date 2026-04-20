@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Welcome to {{ brand_name }}!{% endblock %}
+
+{% block content %}
+<h2>Welcome to {{ brand_name }}!</h2>
+
+<p>Hi {{ user_name }},</p>
+
+<p>
+    Thank you for signing up! Your account has been successfully created with the email address
+    <strong>{{ user_email }}</strong>.
+</p>
+
+<p>You can now access all the features and start using {{ brand_name }}:</p>
+
+<a href="{{ dashboard_url }}" class="button">Go to Dashboard</a>
+
+<div class="info-box">
+    <p><strong>Getting Started Tips:</strong></p>
+    <ul style="margin: 8px 0; padding-left: 20px;">
+        <li>Complete your profile to personalize your experience</li>
+        <li>Invite team members to collaborate</li>
+        <li>Explore our features and tools</li>
+    </ul>
+</div>
+
+<p>
+    If you have any questions or need assistance, don't hesitate to reach out to our support team at
+    <a href="mailto:{{ support_email }}" style="color: #4F46E5;">{{ support_email }}</a>.
+</p>
+
+<p>We're thrilled to have you with us!</p>
+
+<p>
+    Best regards,<br>
+    The {{ brand_name }} Team
+</p>
+{% endblock %}

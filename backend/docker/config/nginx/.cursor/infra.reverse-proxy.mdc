@@ -1,0 +1,296 @@
+---
+description: Reverse proxy et routing pour backend SaaS - agnostique projet
+alwaysApply: true
+globs:
+  - "docker/compose/**/traefik*.yml"
+  - "docker/config/traefik/**"
+---
+
+# Règles Reverse Proxy & Routing
+
+## Contexte
+
+**Cible** : Reverse proxy pour backend SaaS (Traefik, Nginx, Caddy)  
+**Audience** : DevOps et architectes  
+**Application** : Règles contractuelles non négociables
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Reverse proxy obligatoire
+
+**Règle** : Jamais exposer services applicatifs directement.
+
+```yaml
+# ✓ FAIRE
+Internet → Traefik/Nginx → Services internes
+
+# ✗ INTERDIT
+Internet → API:8000 directement exposé
+```
+
+---
+
+### BLOC-002 : TLS obligatoire en production
+
+**Règle** : Terminer TLS au niveau du reverse proxy.
+
+```yaml
+# ✓ FAIRE
+traefik:
+  command:
+    - --entrypoints.web.address=:80
+    - --entrypoints.websecure.address=:443
+    - --entrypoints.web.http.redirections.entrypoint.to=websecure
+```
+
+---
+
+### BLOC-003 : TLS minimum 1.2
+
+**Règle** : Désactiver TLS 1.0 et 1.1.
+
+```yaml
+# ✓ FAIRE
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      maxVersion: VersionTLS13
+```
+
+---
+
+### BLOC-004 : Timeouts adaptés
+
+**Règle** : Configurer timeouts pour LLM et longues opérations.
+
+```yaml
+# ✓ FAIRE
+traefik:
+  command:
+    - --providers.docker.defaultRule=Host(`{{ index .Labels "com.docker.compose.service" }}.example.com`)
+    - --serverstransport.forwardingtimeouts.dialtimeout=5s
+    - --serverstransport.forwardingtimeouts.responseheadertimeout=300s  # 5min pour LLM
+    - --serverstransport.forwardingtimeouts.idletimeout=60s
+```
+
+---
+
+### BLOC-005 : Headers de sécurité
+
+**Règle** : Ajouter headers de sécurité HTTP.
+
+```yaml
+# ✓ FAIRE
+traefik:
+  labels:
+    - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
+    - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
+    - "traefik.http.middlewares.security-headers.headers.browserXssFilter=true"
+    - "traefik.http.middlewares.security-headers.headers.frameDeny=true"
+```
+
+---
+
+### BLOC-006 : Domaines par environnement
+
+**Règle** : Séparer domaines dev/staging/prod.
+
+```
+✓ api.example.com          (prod)
+✓ api.staging.example.com  (staging)
+✓ api.dev.example.com      (dev)
+
+✗ api.example.com pour tous les envs
+```
+
+---
+
+### BLOC-007 : Rate limiting
+
+**Règle** : Activer rate limiting sur endpoints publics.
+
+```yaml
+# ✓ FAIRE
+traefik:
+  labels:
+    - "traefik.http.middlewares.rate-limit.ratelimit.average=100"
+    - "traefik.http.middlewares.rate-limit.ratelimit.burst=50"
+```
+
+---
+
+### BLOC-008 : Opt-in explicit
+
+**Règle** : Services non exposés par défaut.
+
+```yaml
+# ✓ FAIRE
+traefik:
+  command:
+    - --providers.docker.exposedByDefault=false
+
+api:
+  labels:
+    - "traefik.enable=true"  # Opt-in explicite
+```
+
+---
+
+### BLOC-009 : Load balancing pour scaling
+
+**Règle** : Configurer load balancer pour replicas multiples.
+
+```yaml
+# ✓ FAIRE
+api:
+  deploy:
+    replicas: 3
+  labels:
+    - "traefik.http.services.api.loadbalancer.server.port=8000"
+    - "traefik.http.services.api.loadbalancer.sticky.cookie=true"
+```
+
+---
+
+### BLOC-010 : Logs access centralisés
+
+**Règle** : Logger tous les accès via reverse proxy.
+
+```yaml
+# ✓ FAIRE
+traefik:
+  command:
+    - --accesslog=true
+    - --accesslog.filepath=/var/log/traefik/access.log
+    - --accesslog.format=json
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Certificats wildcard
+
+**Règle** : Utiliser wildcards pour sous-domaines.
+
+```yaml
+# ✓ PRÉFÉRÉ
+tls:
+  certificates:
+    - certFile: /ssl/*.example.com.crt
+      keyFile: /ssl/*.example.com.key
+```
+
+---
+
+### STRONG-002 : CORS configuré
+
+**Règle** : Configurer CORS au niveau proxy.
+
+```yaml
+# ✓ PRÉFÉRÉ
+traefik:
+  labels:
+    - "traefik.http.middlewares.cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE"
+    - "traefik.http.middlewares.cors.headers.accesscontrolalloworiginlist=https://app.example.com"
+```
+
+---
+
+### STRONG-003 : Compression activée
+
+**Règle** : Activer compression gzip/brotli.
+
+```yaml
+# ✓ PRÉFÉRÉ
+traefik:
+  labels:
+    - "traefik.http.middlewares.compress.compress=true"
+```
+
+---
+
+### STRONG-004 : IP whitelist pour admin
+
+**Règle** : Restreindre accès interfaces admin.
+
+```yaml
+# ✓ PRÉFÉRÉ
+traefik:
+  labels:
+    - "traefik.http.middlewares.admin-ip.ipwhitelist.sourcerange=192.168.1.0/24,10.0.0.0/8"
+```
+
+---
+
+### STRONG-005 : Métriques Prometheus
+
+**Règle** : Exposer métriques du proxy.
+
+```yaml
+# ✓ PRÉFÉRÉ
+traefik:
+  command:
+    - --metrics.prometheus=true
+    - --metrics.prometheus.entryPoint=metrics
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : WAF intégré
+
+**Règle** : Ajouter ModSecurity ou similaire.
+
+---
+
+### OPT-002 : CDN devant proxy
+
+**Règle** : Utiliser Cloudflare/Fastly en frontal.
+
+---
+
+### OPT-003 : Circuit breaker
+
+**Règle** : Implémenter circuit breaker au niveau proxy.
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist Reverse Proxy** :
+
+- [ ] Reverse proxy configuré
+- [ ] TLS obligatoire
+- [ ] TLS >= 1.2
+- [ ] Timeouts adaptés (300s pour LLM)
+- [ ] Headers de sécurité
+- [ ] Domaines par environnement
+- [ ] Rate limiting
+- [ ] Opt-in explicite
+- [ ] Load balancing
+- [ ] Logs access
+- [ ] CORS configuré
+- [ ] Compression activée
+
+**Pattern Traefik complet** :
+
+```yaml
+traefik:
+  image: traefik:v2.10
+  command:
+    - --providers.docker=true
+    - --providers.docker.exposedByDefault=false
+    - --entrypoints.web.address=:80
+    - --entrypoints.websecure.address=:443
+    - --certificatesresolvers.le.acme.email=admin@example.com
+  ports:
+    - "80:80"
+    - "443:443"
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+```

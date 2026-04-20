@@ -1,0 +1,501 @@
+---
+description: Authentification et permissions API - JWT, Depends - agnostique projet
+alwaysApply: true
+---
+
+# Règles Authentification & Permissions API
+
+## Contexte
+
+**Cible** : FastAPI REST APIs + JWT Authentication  
+**Audience** : LLM et développeurs  
+**Application** : Contrat API stable, non négociable  
+**Portée** : Agnostique au domaine métier
+
+---
+
+## 🔴 Règles BLOCKING
+
+### BLOC-001 : Depends pour authentification
+
+**Règle** : Utiliser FastAPI Depends pour injection d'authentification, jamais extraction manuelle.
+
+```python
+# ✓ FAIRE
+from fastapi import Depends
+from app.api.dependencies.auth import get_current_user_id
+
+@router.get("/me")
+async def get_current_user(
+    user_id: UUID = Depends(get_current_user_id)
+):
+    return await user_service.get_by_id(user_id)
+
+# ✗ INTERDIT
+@router.get("/me")
+async def get_current_user(request: Request):
+    # ✗ Extraction manuelle du token
+    token = request.headers.get("Authorization")
+    user_id = decode_token(token)
+    return await user_service.get_by_id(user_id)
+```
+
+---
+
+### BLOC-002 : Endpoints publics explicites
+
+**Règle** : Les endpoints publics ne doivent pas avoir de Depends(auth).
+
+```python
+# ✓ FAIRE
+@router.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+@router.get("/share/{token}")
+async def get_public_share(token: str):
+    return await share_service.get_by_token(token)
+
+@router.get("/me")
+async def get_me(user_id: UUID = Depends(get_current_user_id)):
+    return await user_service.get_by_id(user_id)
+
+# Clair : /health et /share publics, /me protégé
+```
+
+---
+
+### BLOC-003 : HTTPException 401 vs 403 distinction
+
+**Règle** : 401 pour auth manquante/invalide, 403 pour permissions insuffisantes.
+
+```python
+# ✓ FAIRE
+async def get_current_user_id(
+    authorization: str = Header(None, alias="Authorization")
+) -> UUID:
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
+    try:
+        token = authorization.replace("Bearer ", "")
+        payload = jwt.decode(token, SECRET_KEY)
+        return UUID(payload["sub"])
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+async def get_current_admin_id(
+    user_id: UUID = Depends(get_current_user_id)
+) -> UUID:
+    user = await user_service.get_by_id(user_id)
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required"
+        )
+    return user_id
+```
+
+---
+
+### BLOC-004 : request.state.user_id propagation
+
+**Règle** : Stocker user_id dans request.state pour propagation aux services.
+
+```python
+# ✓ FAIRE
+# Middleware
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    token = request.headers.get("Authorization")
+    if token:
+        user_id = decode_token(token)
+        request.state.user_id = user_id
+    else:
+        request.state.user_id = None
+    
+    response = await call_next(request)
+    return response
+
+# Router
+@router.post("/{id}/process")
+async def process_entity(
+    request: Request,
+    entity_id: UUID,
+    user_id: UUID = Depends(get_current_user_id)
+):
+    correlation_id = getattr(request.state, "correlation_id", "")
+    
+    return await service.process(
+        entity_id=entity_id,
+        user_id=user_id,
+        correlation_id=correlation_id
+    )
+```
+
+---
+
+### BLOC-005 : Pas de secrets dans query params
+
+**Règle** : Tokens/credentials doivent être dans headers, jamais query params.
+
+```python
+# ✓ FAIRE
+@router.get("/entities")
+async def list_entities(
+    authorization: str = Header(..., alias="Authorization")
+):
+    pass
+
+# ✗ INTERDIT
+@router.get("/entities")
+async def list_entities(
+    token: str = Query(...)  # ✗ Token dans query string → logs serveur
+):
+    pass
+```
+
+---
+
+## 🟡 Règles STRONG
+
+### STRONG-001 : Optional auth avec dependency
+
+**Règle** : Créer une dependency distincte pour auth optionnelle.
+
+```python
+# ✓ PRÉFÉRÉ
+async def get_current_user_id_optional(
+    authorization: str | None = Header(None, alias="Authorization")
+) -> UUID | None:
+    if not authorization:
+        return None
+    
+    try:
+        token = authorization.replace("Bearer ", "")
+        payload = jwt.decode(token, SECRET_KEY)
+        return UUID(payload["sub"])
+    except jwt.InvalidTokenError:
+        return None
+
+# Usage
+@router.get("/entities")
+async def list_entities(
+    user_id: UUID | None = Depends(get_current_user_id_optional)
+):
+    # Comportement adapté selon auth
+    if user_id:
+        return await service.list_user_entities(user_id)
+    else:
+        return await service.list_public_entities()
+```
+
+---
+
+### STRONG-002 : Admin routes sous /admin prefix
+
+**Règle** : Isoler les routes admin et utiliser Depends(get_current_admin_id).
+
+```python
+# ✓ PRÉFÉRÉ
+admin_router = APIRouter(prefix="/admin", tags=["admin"])
+
+@admin_router.get("/users")
+async def list_all_users(
+    admin_id: UUID = Depends(get_current_admin_id)
+):
+    return await user_service.list_all()
+
+@admin_router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: UUID,
+    admin_id: UUID = Depends(get_current_admin_id)
+):
+    return await user_service.delete(user_id)
+```
+
+---
+
+### STRONG-003 : Ownership check systématique
+
+**Règle** : Vérifier l'ownership avant modifications sur ressources utilisateur.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.patch("/{entity_id}")
+async def update_entity(
+    entity_id: UUID,
+    data: EntityUpdate,
+    user_id: UUID = Depends(get_current_user_id)
+):
+    entity = await service.get_by_id(entity_id)
+    
+    if entity.owner_id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only update your own entities"
+        )
+    
+    return await service.update(entity_id, data)
+
+# Alternative : ownership check dans service
+@router.patch("/{entity_id}")
+async def update_entity(
+    entity_id: UUID,
+    data: EntityUpdate,
+    user_id: UUID = Depends(get_current_user_id)
+):
+    return await service.update(entity_id, data, user_id=user_id)
+    # Service lève PermissionError si ownership invalide
+```
+
+---
+
+### STRONG-004 : WWW-Authenticate header sur 401
+
+**Règle** : Inclure WWW-Authenticate header dans réponses 401.
+
+```python
+# ✓ PRÉFÉRÉ
+raise HTTPException(
+    status_code=401,
+    detail="Invalid or expired token",
+    headers={"WWW-Authenticate": "Bearer"}
+)
+```
+
+---
+
+### STRONG-005 : Rate limiting par user
+
+**Règle** : Appliquer rate limiting par user_id, pas seulement IP.
+
+```python
+# ✓ PRÉFÉRÉ
+@router.post("/entities")
+async def create_entity(
+    data: EntityCreate,
+    user_id: UUID = Depends(get_current_user_id)
+):
+    if await rate_limiter.is_exceeded(user_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": "60"}
+        )
+    
+    return await service.create(data, user_id=user_id)
+```
+
+---
+
+## 🟢 Règles OPTIONAL
+
+### OPT-001 : Permissions granulaires avec RBAC
+
+**Règle** : Implémenter RBAC pour permissions complexes.
+
+```python
+# ✓ OPTIMAL
+from enum import Enum
+
+class Permission(str, Enum):
+    ENTITY_READ = "entity:read"
+    ENTITY_WRITE = "entity:write"
+    ENTITY_DELETE = "entity:delete"
+    ADMIN_ACCESS = "admin:access"
+
+async def require_permission(permission: Permission):
+    async def dependency(user_id: UUID = Depends(get_current_user_id)):
+        user = await user_service.get_by_id(user_id)
+        if permission.value not in user.permissions:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Permission {permission.value} required"
+            )
+        return user_id
+    return dependency
+
+# Usage
+@router.delete("/{entity_id}")
+async def delete_entity(
+    entity_id: UUID,
+    user_id: UUID = Depends(require_permission(Permission.ENTITY_DELETE))
+):
+    return await service.delete(entity_id)
+```
+
+---
+
+### OPT-002 : API keys pour service-to-service
+
+**Règle** : Supporter API keys pour auth machine-to-machine.
+
+```python
+# ✓ OPTIMAL
+async def get_api_key(
+    x_api_key: str = Header(..., alias="X-API-Key")
+) -> str:
+    api_key = await api_key_service.validate(x_api_key)
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
+    return api_key.id
+
+@router.post("/webhooks/process")
+async def process_webhook(
+    data: WebhookData,
+    api_key_id: str = Depends(get_api_key)
+):
+    return await webhook_service.process(data, api_key_id)
+```
+
+---
+
+### OPT-003 : Token refresh pattern
+
+**Règle** : Implémenter refresh tokens pour renouvellement sans re-login.
+
+```python
+# ✓ OPTIMAL
+@router.post("/auth/refresh")
+async def refresh_token(refresh_token: str = Body(...)):
+    try:
+        payload = jwt.decode(refresh_token, SECRET_KEY)
+        if payload["type"] != "refresh":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+        
+        user_id = UUID(payload["sub"])
+        access_token = generate_access_token(user_id)
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer"
+        }
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+```
+
+---
+
+### OPT-004 : Audit logging des actions sensibles
+
+**Règle** : Logger toutes les opérations sensibles avec user_id.
+
+```python
+# ✓ OPTIMAL
+@router.delete("/{entity_id}")
+async def delete_entity(
+    request: Request,
+    entity_id: UUID,
+    user_id: UUID = Depends(get_current_user_id)
+):
+    correlation_id = getattr(request.state, "correlation_id", "")
+    
+    # Audit log avant suppression
+    audit_logger.log_info("Entity deletion", {
+        "operation": "delete_entity",
+        "entity_id": str(entity_id),
+        "user_id": str(user_id),
+        "correlation_id": correlation_id,
+        "ip": request.client.host
+    })
+    
+    return await service.delete(entity_id, user_id=user_id)
+```
+
+---
+
+## 📋 Aide-mémoire
+
+**Checklist authentification API** :
+
+- [ ] Depends pour injection auth (pas extraction manuelle)
+- [ ] Endpoints publics sans Depends
+- [ ] 401 pour auth manquante, 403 pour permissions insuffisantes
+- [ ] request.state.user_id propagé aux services
+- [ ] Tokens dans headers (pas query params)
+- [ ] Optional auth avec dependency distincte
+- [ ] Admin routes sous /admin avec Depends(get_current_admin_id)
+- [ ] Ownership check avant modifications
+- [ ] WWW-Authenticate header sur 401
+- [ ] Rate limiting par user_id
+
+**Template auth dependencies** :
+
+```python
+# app/api/dependencies/auth.py
+from fastapi import Header, HTTPException, Depends
+from uuid import UUID
+import jwt
+
+async def get_current_user_id(
+    authorization: str = Header(..., alias="Authorization")
+) -> UUID:
+    """Required authentication."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    
+    token = authorization.replace("Bearer ", "")
+    
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+        return UUID(payload["sub"])
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+async def get_current_user_id_optional(
+    authorization: str | None = Header(None, alias="Authorization")
+) -> UUID | None:
+    """Optional authentication."""
+    if not authorization:
+        return None
+    
+    try:
+        return await get_current_user_id(authorization)
+    except HTTPException:
+        return None
+
+async def get_current_admin_id(
+    user_id: UUID = Depends(get_current_user_id)
+) -> UUID:
+    """Admin-only authentication."""
+    user = await user_service.get_by_id(user_id)
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin access required"
+        )
+    return user_id
+```
+
+**Commandes utiles** :
+
+```bash
+# Vérifier extraction manuelle de tokens
+grep -r "request.headers.get.*Authorization" app/api/routers/
+
+# Vérifier ownership checks manquants
+grep -r "@router.patch\|@router.delete" app/ -A 10 | grep -v "owner_id"
+
+# Vérifier WWW-Authenticate manquant
+grep -r "status_code=401" app/ | grep -v "WWW-Authenticate"
+```

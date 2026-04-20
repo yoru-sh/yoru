@@ -1,0 +1,12 @@
+# Main Docker Compose file for SaaS stack
+# This is an alias for the development environment (backward compatibility)
+#
+# For explicit environment selection:
+#   Development: docker compose -f docker-compose.dev.yml up
+#   Production:  docker compose -f docker-compose.prod.yml up
+#
+# Default behavior (this file):
+#   docker compose up  # Uses development environment
+
+include:
+  - docker-compose.dev.yml
