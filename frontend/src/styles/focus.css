@@ -1,0 +1,15 @@
+/* Receipt — global keyboard-focus styles.
+   Applies a single accent-amber outline to every focus-visible element so
+   keyboard users land on a ring even when a component author forgets the
+   per-element `focus-visible:ring-*` utility. Mouse focus stays bare.
+   Token: --accent-500 (RGB triplet, see styles/tokens.css). */
+
+*:focus-visible {
+  outline: 2px solid rgb(var(--accent-500));
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+*:focus:not(:focus-visible) {
+  outline: none;
+}
