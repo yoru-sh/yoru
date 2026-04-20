@@ -32,6 +32,7 @@ from apps.api.api.routers.receipt.auth_router import AuthRouter
 from apps.api.api.routers.receipt.dashboard_router import DashboardRouter
 from apps.api.api.routers.receipt.db import init_db
 from apps.api.api.routers.receipt.events_router import EventsRouter
+from apps.api.api.routers.receipt.health_deep_router import HealthDeepRouter
 from apps.api.api.routers.receipt.sessions_router import SessionsRouter
 from apps.api.api.routers.receipt.summary_router import SummaryRouter
 from apps.api.api.routers.webhooks import WebhooksRouter
@@ -120,6 +121,9 @@ app.include_router(billing_webhook_router.get_router(), prefix="/api/v1/billing"
 
 webhooks_router = WebhooksRouter()
 app.include_router(webhooks_router.get_router(), prefix="/api/v1")
+
+health_deep_router = HealthDeepRouter()
+app.include_router(health_deep_router.get_router(), prefix="/api/v1")
 
 ops_router = OpsRouter()
 app.include_router(ops_router.get_router())
