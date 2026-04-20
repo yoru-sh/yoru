@@ -20,19 +20,22 @@ export default {
           950: "#0f0d0c",
           DEFAULT: "#17140f",
         },
-        // Amber accent — thermal-receipt ink fade, single gold for CTAs/links.
+        // Amber accent — thermal-receipt ink fade. CSS-var-backed so opacity
+        // modifiers (`bg-accent-500/10`) resolve, and a future palette swap
+        // lives entirely in tokens.css. Each numeric step is a static literal
+        // class (`text-accent-50` … `bg-accent-900`) per JIT requirements.
         accent: {
-          50:  "#fffbeb",
-          100: "#fef3c7",
-          200: "#fde68a",
-          300: "#fcd34d",
-          400: "#fbbf24",
-          500: "#f59e0b",
-          600: "#d97706",
-          700: "#b45309",
-          800: "#92400e",
-          900: "#78350f",
-          DEFAULT: "#f59e0b",
+          50:  "rgb(var(--accent-50)  / <alpha-value>)",
+          100: "rgb(var(--accent-100) / <alpha-value>)",
+          200: "rgb(var(--accent-200) / <alpha-value>)",
+          300: "rgb(var(--accent-300) / <alpha-value>)",
+          400: "rgb(var(--accent-400) / <alpha-value>)",
+          500: "rgb(var(--accent-500) / <alpha-value>)",
+          600: "rgb(var(--accent-600) / <alpha-value>)",
+          700: "rgb(var(--accent-700) / <alpha-value>)",
+          800: "rgb(var(--accent-800) / <alpha-value>)",
+          900: "rgb(var(--accent-900) / <alpha-value>)",
+          DEFAULT: "rgb(var(--accent-500) / <alpha-value>)",
         },
         // Semantic aliases — CSS-var backed, swap with .dark on <html>.
         paper:   "rgb(var(--bg-page)    / <alpha-value>)",
@@ -46,12 +49,21 @@ export default {
         },
         // Red-flag badge palette — 5 distinct hues, severity gradient
         // wine → red → orange → amber → honey (most severe first).
+        // DEFAULT is now CSS-var-backed (alpha-modifier-safe); bg/fg pairs
+        // stay static-hex to keep `bg-flag-secret-bg` literals greppable.
         flag: {
-          secret:    { DEFAULT: "#881337", bg: "#450a1f", fg: "#ffe4e6" }, // rose-900
-          env:       { DEFAULT: "#dc2626", bg: "#7f1d1d", fg: "#fee2e2" }, // red-600
-          shell:     { DEFAULT: "#ea580c", bg: "#7c2d12", fg: "#ffedd5" }, // orange-600
-          migration: { DEFAULT: "#d97706", bg: "#78350f", fg: "#fef3c7" }, // amber-600 (yellow-amber)
-          ci:        { DEFAULT: "#ca8a04", bg: "#713f12", fg: "#fef9c3" }, // yellow-600 (amber honey)
+          secret:    { DEFAULT: "rgb(var(--flag-secret)    / <alpha-value>)", bg: "#450a1f", fg: "#ffe4e6" },
+          env:       { DEFAULT: "rgb(var(--flag-env)       / <alpha-value>)", bg: "#7f1d1d", fg: "#fee2e2" },
+          shell:     { DEFAULT: "rgb(var(--flag-shell)     / <alpha-value>)", bg: "#7c2d12", fg: "#ffedd5" },
+          migration: { DEFAULT: "rgb(var(--flag-migration) / <alpha-value>)", bg: "#78350f", fg: "#fef3c7" },
+          ci:        { DEFAULT: "rgb(var(--flag-ci)        / <alpha-value>)", bg: "#713f12", fg: "#fef9c3" },
+        },
+        // File-op semantic colors — Swiss "color as information."
+        // Use as `text-op-create`, `bg-op-edit/10`, `border-op-delete`.
+        op: {
+          create: "rgb(var(--op-create) / <alpha-value>)",
+          edit:   "rgb(var(--op-edit)   / <alpha-value>)",
+          delete: "rgb(var(--op-delete) / <alpha-value>)",
         },
       },
       fontFamily: {
@@ -61,11 +73,20 @@ export default {
       fontSize: {
         micro:   ['0.6875rem', { lineHeight: '1rem',    letterSpacing: '0.02em' }], // 11
         caption: ['0.8125rem', { lineHeight: '1.125rem' }],                         // 13
+        // Override Tailwind default 36px → 32px to match DESIGN-SYSTEM §Typography
+        // (Swiss page-h1 step). text-2xl (24) and text-lg (18) already correct.
+        '4xl':   ['2rem',      { lineHeight: '2.5rem',  letterSpacing: '-0.01em' }], // 32
       },
       borderRadius: {
         sm: "var(--radius-sm)",
         DEFAULT: "var(--radius-md)",
         lg: "var(--radius-lg)",
+      },
+      boxShadow: {
+        // Hairline elevation only — Swiss bans z-stacked Material tiers.
+        sm: "var(--shadow-sm)",
+        DEFAULT: "var(--shadow-md)",
+        md: "var(--shadow-md)",
       },
       transitionDuration: {
         micro: "120ms",

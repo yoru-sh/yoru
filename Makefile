@@ -5,11 +5,13 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-BACKEND  := backend
-FRONTEND := frontend
+BACKEND   := backend
+FRONTEND  := frontend
+MARKETING := marketing
 
 .PHONY: help install install-backend install-frontend dev dev-backend dev-frontend \
-        test test-backend test-frontend lint lint-backend lint-frontend build \
+        dev-marketing build-marketing \
+        test test-backend test-frontend smoke lint lint-backend lint-frontend build \
         build-backend build-frontend clean down restart-backend
 
 help:
@@ -43,6 +45,14 @@ restart-backend:
 dev-frontend:
 	cd $(FRONTEND) && npm run dev
 
+dev-marketing:
+	@if [ -f $(MARKETING)/package.json ]; then cd $(MARKETING) && npm run dev; \
+	else echo "marketing/package.json missing — not scaffolded yet"; fi
+
+build-marketing:
+	@if [ -f $(MARKETING)/package.json ]; then cd $(MARKETING) && npm install --no-audit --no-fund && npm run build; \
+	else echo "marketing/package.json missing — not scaffolded yet"; fi
+
 test: test-backend test-frontend
 
 test-backend:
@@ -52,6 +62,9 @@ test-frontend:
 	@if [ -f $(FRONTEND)/package.json ] && grep -q '"test"' $(FRONTEND)/package.json; then \
 		cd $(FRONTEND) && npm run test; \
 	else echo "frontend tests not configured — skipping"; fi
+
+smoke:
+	bash scripts/smoke-us14.sh
 
 lint: lint-backend lint-frontend
 
@@ -69,7 +82,7 @@ build-frontend:
 	else echo "frontend/package.json missing — skipping"; fi
 
 build-backend:
-	cd $(BACKEND) && docker build -f docker/image/api/Dockerfile -t overnight-saas-api:dev .
+	cd $(BACKEND) && docker build -t overnight-saas-api:dev .
 
 down:
 	docker compose down

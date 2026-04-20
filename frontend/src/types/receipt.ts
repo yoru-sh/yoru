@@ -33,6 +33,14 @@ export interface SessionEvent {
   error_message?: string
   text?: string
   flag?: RedFlagKind
+  /** Tool stdout/stderr/error preview (capped 800 chars). */
+  output?: string
+  // SESSION-DETAIL-V1 additions (backend EventOut v1, all optional / non-breaking).
+  tool?: string
+  path?: string
+  content?: string
+  duration_ms?: number
+  group_key?: string
 }
 
 export interface FileChanged {
@@ -45,6 +53,7 @@ export interface FileChanged {
 export interface SessionDetail extends Session {
   events: SessionEvent[]
   files_changed: FileChanged[]
+  summary?: string | null
 }
 
 export interface Summary {

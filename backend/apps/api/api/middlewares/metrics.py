@@ -1,66 +1,72 @@
-"""STUB — in-memory only, process-local, lost on restart. Replace with prometheus-client in v1.
+"""Prometheus-client HTTP request metrics middleware for Receipt.
 
-In-process request counter middleware. Wraps ASGI `send` to capture the response
-status, reads the matched route's templated path from `scope["route"].path` so
-URLs like `/api/v1/sessions/abc123` collapse to `/api/v1/sessions/{session_id}`
-and don't blow up cardinality. Exposes a Prometheus-text snapshot via the
-`render_prometheus()` helper consumed by the `/metrics` route in main.py.
+Metrics (Wave-17 C1 canonical exposition):
+- `receipt_events_ingested_total{kind,flagged}` — business counter, incremented
+  by the events router (not here). Kept at module scope so the router can
+  `.labels(...).inc()` it.
+- `http_requests_total{method,path,status}` — canonical Prom name. Counter
+  incremented by this middleware on every HTTP response.
+- `http_request_duration_seconds{method,path,status}` — canonical Prom name.
+  Histogram with the standard client-default buckets plus 10.0s, observed via
+  `time.perf_counter()`. `path` carries the route template (e.g.
+  `/sessions/{session_id}`), never the raw path — cardinality-safe.
 
-Skipped on purpose:
-- Unmatched paths (no `scope["route"]`): we don't record them, so 404 scanners
-  can't inflate the counter map.
-- The `/metrics` endpoint itself: avoids self-counting noise.
+Exposition:
+- `render_prometheus() -> bytes` returns `generate_latest()` output (wire-ready).
+  main.py's /metrics handler sets `media_type=CONTENT_TYPE_LATEST` so Starlette
+  emits `text/plain; version=0.0.4; charset=utf-8`.
+
+Unmatched routes collapse to a single `path="unmatched"` label to keep
+404-scanner traffic visible without cardinality explosion. `/metrics` itself
+is excluded (scrape traffic is noise, not signal).
 """
 from __future__ import annotations
 
-import threading
+import time
 from typing import Iterable
 
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Histogram,
+    generate_latest,
+)
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-# (method, path_template, status) -> count
-_counter: dict[tuple[str, str, int], int] = {}
-_lock = threading.Lock()
+__all__ = [
+    "CONTENT_TYPE_LATEST",
+    "RequestMetricsMiddleware",
+    "http_request_duration_seconds",
+    "http_requests_total",
+    "receipt_events_ingested_total",
+    "render_prometheus",
+]
 
-# Paths we never want to record. /metrics so it doesn't self-count.
+receipt_events_ingested_total = Counter(
+    "receipt_events_ingested_total",
+    "events accepted by /sessions/events",
+    ["kind", "flagged"],
+)
+
+http_requests_total = Counter(
+    "http_requests_total",
+    "Total HTTP requests",
+    ["method", "path", "status"],
+)
+
+http_request_duration_seconds = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency",
+    ["method", "path", "status"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
 _EXCLUDE_PATHS: frozenset[str] = frozenset({"/metrics"})
 
-_METRIC_NAME = "receipt_http_requests_total"
 
-
-def increment(method: str, path_template: str, status: int) -> None:
-    key = (method, path_template, status)
-    with _lock:
-        _counter[key] = _counter.get(key, 0) + 1
-
-
-def snapshot() -> dict[tuple[str, str, int], int]:
-    with _lock:
-        return dict(_counter)
-
-
-def reset() -> None:
-    with _lock:
-        _counter.clear()
-
-
-def _escape_label_value(v: str) -> str:
-    # Prometheus text format: backslash, double-quote, newline must be escaped.
-    return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-
-
-def render_prometheus() -> str:
-    lines: list[str] = [
-        f"# HELP {_METRIC_NAME} Total HTTP requests by method, path template, status.",
-        f"# TYPE {_METRIC_NAME} counter",
-    ]
-    for (method, path, status), count in sorted(snapshot().items()):
-        m = _escape_label_value(method)
-        p = _escape_label_value(path)
-        lines.append(
-            f'{_METRIC_NAME}{{method="{m}",path="{p}",status="{status}"}} {count}'
-        )
-    return "\n".join(lines) + "\n"
+def render_prometheus() -> bytes:
+    """Return the Prometheus exposition snapshot as bytes (wire-ready)."""
+    return generate_latest()
 
 
 class RequestMetricsMiddleware:
@@ -75,6 +81,11 @@ class RequestMetricsMiddleware:
             await self.app(scope, receive, send)
             return
 
+        raw_path = scope.get("path", "") or ""
+        if raw_path in self.exclude_paths:
+            await self.app(scope, receive, send)
+            return
+
         status_box: dict[str, int] = {}
 
         async def _send(message: Message) -> None:
@@ -82,19 +93,20 @@ class RequestMetricsMiddleware:
                 status_box["status"] = int(message["status"])
             await send(message)
 
+        start = time.perf_counter()
         try:
             await self.app(scope, receive, _send)
         finally:
-            raw_path = scope.get("path", "") or ""
-            if raw_path in self.exclude_paths:
-                return
-            route = scope.get("route")
-            template = getattr(route, "path", None)
-            if not template:
-                # Unmatched route — skip to avoid cardinality explosion from scanners.
-                return
+            duration = time.perf_counter() - start
             status = status_box.get("status")
-            if status is None:
-                return
-            method = scope.get("method", "") or ""
-            increment(method, template, status)
+            if status is not None:
+                route = scope.get("route")
+                template = getattr(route, "path", None) or "unmatched"
+                method = scope.get("method", "") or ""
+                status_str = str(status)
+                http_requests_total.labels(
+                    method=method, path=template, status=status_str
+                ).inc()
+                http_request_duration_seconds.labels(
+                    method=method, path=template, status=status_str
+                ).observe(duration)

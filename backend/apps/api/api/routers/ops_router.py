@@ -16,8 +16,8 @@ from pathlib import Path
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 
+from apps.api.api.routers.ops_probes import run_readiness_probes
 from apps.api.api.routers.receipt.db import engine
 
 
@@ -67,23 +67,22 @@ class OpsRouter:
 
     def _setup_routes(self) -> None:
         self.router.get("/health")(self.health)
+        self.router.get("/healthz")(self.health)
         self.router.get("/health/ready")(self.ready)
+        self.router.get("/readyz")(self.ready)
         self.router.get("/version")(self.version)
 
     async def health(self) -> dict:
         return {"status": "ok"}
 
     async def ready(self) -> JSONResponse:
-        try:
-            with engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-        except Exception as exc:
-            reason = type(exc).__name__
-            return JSONResponse(
-                status_code=503,
-                content={"status": "unready", "reason": reason},
-            )
-        return JSONResponse(status_code=200, content={"status": "ok"})
+        probes = run_readiness_probes(engine)
+        overall_ok = all(p["status"] == "ok" for p in probes)
+        body = {"status": "ok" if overall_ok else "unready", "probes": probes}
+        return JSONResponse(
+            status_code=200 if overall_ok else 503,
+            content=body,
+        )
 
     async def version(self) -> dict:
         payload: dict = {"version": _VERSION, "python": _PYTHON}

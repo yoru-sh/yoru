@@ -1,14 +1,17 @@
-/* ---- Receipt design tokens ----
+/* ---- Receipt design tokens — v1 refresh 2026-04-20 ----
    Theme: `<html class="dark">` is the product default (warm-terminal receipt).
    Removing `.dark` reveals the cream-paper light-mode palette (respects
    prefers-color-scheme + manual toggle — wired in index.html).
 
    RGB triplets so Tailwind's `rgb(var(--token) / <alpha-value>)` opacity
-   modifiers work end-to-end.
+   modifiers work end-to-end. (self-learning §CSS-var-tokens.)
+
+   Aesthetic contract: Swiss / International Typographic in a warm-paper
+   dark key. See vault/AESTHETIC.md.
 ------------------------------- */
 
 :root {
-  /* Light — cream paper under a warm desk lamp */
+  /* Paper palette — light: cream paper under a warm desk lamp */
   --bg-page:      250 247 242;  /* #faf7f2 */
   --bg-surface:   255 253 249;  /* #fffdf9 */
   --bg-sunken:    242 236 224;  /* #f2ece0 */
@@ -16,6 +19,35 @@
   --ink-primary:  31 26 20;     /* #1f1a14 warm near-black */
   --ink-muted:    92 82 66;     /* #5c5242 */
   --ink-faint:    140 128 108;  /* #8c806c */
+
+  /* Accent ramp — single amber, thermal-receipt ink fade. Themable across
+     light/dark in case a future palette warms or cools it; identical here. */
+  --accent-50:    255 251 235;  /* #fffbeb */
+  --accent-100:   254 243 199;  /* #fef3c7 */
+  --accent-200:   253 230 138;  /* #fde68a */
+  --accent-300:   252 211 77;   /* #fcd34d */
+  --accent-400:   251 191 36;   /* #fbbf24 */
+  --accent-500:   245 158 11;   /* #f59e0b */
+  --accent-600:   217 119 6;    /* #d97706 */
+  --accent-700:   180 83 9;     /* #b45309 */
+  --accent-800:   146 64 14;    /* #92400e */
+  --accent-900:   120 53 15;    /* #78350f */
+
+  /* Red-flag palette — non-themable per DESIGN-SYSTEM.md. Severity gradient
+     wine → red → orange → amber → honey. DEFAULT triplets only; bg/fg pairs
+     remain static-hex in tailwind.config.js (literal class preservation). */
+  --flag-secret:    136 19 55;  /* #881337 wine */
+  --flag-env:       220 38 38;  /* #dc2626 red */
+  --flag-shell:     234 88 12;  /* #ea580c orange */
+  --flag-migration: 217 119 6;  /* #d97706 amber */
+  --flag-ci:        202 138 4;  /* #ca8a04 honey */
+
+  /* File-op semantic tokens — Swiss "color as information, not decoration."
+     create=emerald (clean add), edit=accent amber (ink touched),
+     delete=flag-env red (audit-grade alarm). */
+  --op-create:    16 185 129;   /* #10b981 emerald-500 */
+  --op-edit:      245 158 11;   /* #f59e0b mirrors accent-500 */
+  --op-delete:    220 38 38;    /* #dc2626 mirrors flag-env */
 
   --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -28,10 +60,17 @@
   --radius-sm:  2px;   /* receipts have square corners */
   --radius-md:  4px;
   --radius-lg:  6px;
+
+  /* Elevation — hairline only. Swiss bans z-stacked Material shadows;
+     these exist for single-rule overlays (toast, popover, dialog) and
+     never compound. `--shadow-sm` is a 1px rule baked into the box-shadow
+     property so a card can sit flush without a border. */
+  --shadow-sm:  0 1px 0 0 rgb(var(--rule) / 0.6);
+  --shadow-md:  0 2px 8px -2px rgb(0 0 0 / 0.18);
 }
 
 .dark {
-  /* Dark (default) — receipt under dim terminal light */
+  /* Paper palette — dark (default): receipt under dim terminal light */
   --bg-page:      15 13 12;     /* #0f0d0c warm near-black */
   --bg-surface:   23 20 15;     /* #17140f */
   --bg-sunken:    10 8 7;       /* #0a0807 */
@@ -39,6 +78,10 @@
   --ink-primary:  243 238 226;  /* #f3eee2 warm off-white */
   --ink-muted:    170 158 138;  /* #aa9e8a */
   --ink-faint:    113 101 82;   /* #716552 */
+
+  /* Dark elevation — deeper backdrop, still single-layer. */
+  --shadow-sm:  0 1px 0 0 rgb(var(--rule) / 0.8);
+  --shadow-md:  0 2px 12px -2px rgb(0 0 0 / 0.55);
 }
 
 @media (prefers-reduced-motion: reduce) {

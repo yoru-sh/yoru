@@ -50,7 +50,12 @@ docker/.data/
 # Receipt v0 local SQLite
 backend/data/*.db
 backend/data/*.db-*
+backend/data/backups/*.db
+backend/data/backups/*.db-*
 
 # Agent / vault ephemeral
 vault/STOP_NIGHT.off
 vault/*.off
+
+# Agent worktrees
+.worktrees/

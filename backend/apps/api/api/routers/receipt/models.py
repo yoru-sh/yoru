@@ -6,11 +6,12 @@ Contract frozen in vault/BACKEND-API-V0.md §2–§3.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
+from pydantic import model_validator
 from sqlmodel import JSON, Column, Field, SQLModel
 
-EventKind = Literal["tool_use", "file_change", "token", "error"]
+EventKind = Literal["tool_use", "file_change", "token", "error", "session_start", "session_end"]
 
 
 def _utcnow() -> datetime:
@@ -71,13 +72,45 @@ class HookToken(SQLModel, table=True):
     revoked_at: Optional[datetime] = None
 
 
+class PasswordResetToken(SQLModel, table=True):
+    """Single-use password-reset token (wave-14 C4; feature-flagged off by default).
+
+    sha256 of the opaque raw token is what's persisted — same discipline as
+    `HookToken.token_hash`. Rows are kept (not deleted on use) so replay
+    attempts land on a used-at branch and 401 instead of 404.
+    """
+    __tablename__ = "password_reset_tokens"
+
+    id: str = Field(primary_key=True)
+    user_email: str = Field(index=True, max_length=320)
+    token_hash: str = Field(index=True, unique=True)
+    issued_at: datetime = Field(default_factory=_utcnow)
+    expires_at: datetime
+    used_at: Optional[datetime] = None
+
+
 # ---------- Ingestion ----------
 
 class EventIn(SQLModel):
-    """Incoming event from a Claude Code hook."""
+    """Incoming event from a Claude Code hook.
+
+    `user` is optional: when absent, the events router derives it from the
+    bearer token (see events_router + deps.get_current_user). Rejected with
+    422 when neither is present. Bodies that carry `user` keep the v0
+    'user field is trusted' contract for backward compatibility with
+    scripts/smoke-us14.sh and any ingestor that doesn't authenticate.
+
+    `kind` is optional: when absent, the events router classifies it from
+    `tool`/`tool_name` (Write|Edit|MultiEdit → file_change, else tool_use).
+    Closes gap #3 for the real Claude Code hook stdin shape, which carries
+    `tool_name` and no `kind`.
+
+    `tool_name` is accepted as a JSON alias for `tool` to match the Claude
+    Code hook stdin key verbatim without breaking v0 callers that send `tool`.
+    """
     session_id: str
-    user: str
-    kind: EventKind
+    user: Optional[str] = None
+    kind: Optional[EventKind] = None
     ts: Optional[datetime] = None
     tool: Optional[str] = None
     path: Optional[str] = None
@@ -86,6 +119,14 @@ class EventIn(SQLModel):
     tokens_output: int = 0
     cost_usd: float = 0.0
     raw: Optional[dict] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_tool_name_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "tool_name" in data and "tool" not in data:
+            data = {**data, "tool": data["tool_name"]}
+            data.pop("tool_name", None)
+        return data
 
 
 class EventsBatchIn(SQLModel):
@@ -135,6 +176,11 @@ class EventOut(SQLModel):
     tokens_output: int
     cost_usd: float
     flags: list[str]
+    # v1 enrichment — computed at serialization time (sessions_router), not persisted.
+    duration_ms: Optional[int] = None
+    group_key: Optional[str] = None
+    # Truncated tool_response preview for the timeline (stdout + stderr + error).
+    output: Optional[str] = None
 
 
 class SessionDetail(SessionListItem):
@@ -187,6 +233,25 @@ class HookTokenListItem(SQLModel):
     created_at: datetime
     last_used_at: Optional[datetime]
     revoked_at: Optional[datetime]
+
+
+# ---------- Password reset (wave-14 C4) ----------
+
+class PasswordResetRequestIn(SQLModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PasswordResetRequestOut(SQLModel):
+    sent: bool
+
+
+class PasswordResetConfirmIn(SQLModel):
+    token: str = Field(min_length=1)
+    new_password: str = Field(min_length=1)
+
+
+class PasswordResetConfirmOut(SQLModel):
+    reset: str
 
 
 # ---------- Team dashboard ----------

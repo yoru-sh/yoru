@@ -12,9 +12,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import Response
 
+from apps.api.api.core.errors import install_error_handlers
 from apps.api.api.middlewares.metrics import (
+    CONTENT_TYPE_LATEST,
     RequestMetricsMiddleware,
     render_prometheus,
 )
@@ -22,13 +24,17 @@ from apps.api.api.middlewares.rate_limit import RateLimitMiddleware
 from apps.api.api.routers.ops_router import OpsRouter
 from apps.api.api.routers.ping_router import PingRouter
 from apps.api.core.logging import configure_logging
+from apps.api.core.max_body_size import MaxBodySizeMiddleware
 from apps.api.core.request_logging import RequestLoggingMiddleware
+from apps.api.api.routers.billing.checkout import CheckoutRouter
+from apps.api.api.routers.billing.webhook import WebhookRouter
 from apps.api.api.routers.receipt.auth_router import AuthRouter
 from apps.api.api.routers.receipt.dashboard_router import DashboardRouter
 from apps.api.api.routers.receipt.db import init_db
 from apps.api.api.routers.receipt.events_router import EventsRouter
 from apps.api.api.routers.receipt.sessions_router import SessionsRouter
 from apps.api.api.routers.receipt.summary_router import SummaryRouter
+from apps.api.api.routers.webhooks import WebhooksRouter
 
 
 configure_logging()
@@ -53,8 +59,8 @@ app = FastAPI(
 _cors_origins = [
     o.strip()
     for o in os.environ.get(
-        "CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:5173,http://localhost:3000",
     ).split(",")
     if o.strip()
 ]
@@ -70,11 +76,20 @@ app.add_middleware(
 # per request — runaway hooks must not hammer us). SPA reads stay unthrottled.
 app.add_middleware(RateLimitMiddleware)
 
+# Fail fast on oversized POST bodies (256 KiB default) on ingest paths BEFORE
+# CORS/RateLimit/app so a multi-MB attacker payload never reaches Pydantic's
+# `max_length=1000` array guard. Scoped to POST + the three ingest paths only.
+app.add_middleware(MaxBodySizeMiddleware)
+
 # Mint/propagate X-Request-ID and emit one structured JSON log per request.
 app.add_middleware(RequestLoggingMiddleware)
 
 # Outermost: in-process request counter (sees status from every layer below).
 app.add_middleware(RequestMetricsMiddleware)
+
+# Global JSON error envelope + X-Request-ID propagation on error responses.
+# Exception goes to ServerErrorMiddleware (outermost); others to ExceptionMiddleware.
+install_error_handlers(app)
 
 ping_router = PingRouter()
 ping_router.initialize_services()
@@ -97,6 +112,15 @@ app.include_router(auth_router.get_router(), prefix="/api/v1")
 dashboard_router = DashboardRouter()
 app.include_router(dashboard_router.get_router(), prefix="/api/v1")
 
+checkout_router = CheckoutRouter()
+app.include_router(checkout_router.get_router(), prefix="/api/v1/billing")
+
+billing_webhook_router = WebhookRouter()
+app.include_router(billing_webhook_router.get_router(), prefix="/api/v1/billing")
+
+webhooks_router = WebhooksRouter()
+app.include_router(webhooks_router.get_router(), prefix="/api/v1")
+
 ops_router = OpsRouter()
 app.include_router(ops_router.get_router())
 
@@ -111,9 +135,8 @@ async def root():
 
 
 @app.get("/metrics", tags=["ops"])
-async def metrics() -> PlainTextResponse:
-    # PlainTextResponse appends `charset=utf-8` itself; we only specify version.
-    return PlainTextResponse(
+async def metrics() -> Response:
+    return Response(
         content=render_prometheus(),
-        media_type="text/plain; version=0.0.4",
+        media_type=CONTENT_TYPE_LATEST,
     )

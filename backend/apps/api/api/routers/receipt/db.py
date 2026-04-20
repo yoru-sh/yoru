@@ -31,6 +31,8 @@ engine = create_engine(
 def init_db() -> None:
     """Create tables if absent. Safe to call repeatedly (idempotent)."""
     from . import models  # noqa: F401 — registers SQLModel tables
+    from apps.api.api.routers.billing import models as billing_models  # noqa: F401
+    from apps.api.api.models import webhooks as webhook_models  # noqa: F401
     SQLModel.metadata.create_all(engine)
 
 

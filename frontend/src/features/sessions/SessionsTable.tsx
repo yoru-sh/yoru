@@ -1,80 +1,55 @@
 import type { Session } from "../../types/receipt"
+import { EmptyState } from "../../components/ui/EmptyState"
 import { SessionRow } from "./SessionRow"
 
 interface SessionsTableProps {
   sessions: Session[]
 }
 
-const headerCls =
+// Shared responsive grid template — every row (header + data) uses the same.
+// Literal class strings so Tailwind JIT sees them.
+const GRID_COLS =
+  "sm:grid sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.5fr)_minmax(0,0.75fr)_minmax(0,1.5fr)]"
+
+const headerCellCls =
   "px-3 py-2 text-left font-mono text-micro uppercase tracking-wider text-ink-faint"
 
 export function SessionsTable({ sessions }: SessionsTableProps) {
   if (sessions.length === 0) return <SessionsTableEmpty />
   return (
-    <div className="overflow-x-auto rounded border border-rule bg-surface">
-      <table className="min-w-full border-collapse">
-        <thead className="border-b border-rule bg-sunken/60">
-          <tr>
-            <th className={headerCls} scope="col">User</th>
-            <th className={headerCls} scope="col">Started</th>
-            <th className={headerCls} scope="col">Duration</th>
-            <th className={headerCls} scope="col">Tools</th>
-            <th className={headerCls} scope="col">Cost</th>
-            <th className={headerCls} scope="col">Flags</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sessions.map((s) => (
-            <SessionRow key={s.id} session={s} />
-          ))}
-        </tbody>
-      </table>
+    <div className="overflow-hidden rounded-sm border border-rule bg-surface">
+      <div
+        aria-hidden="true"
+        className={"hidden " + GRID_COLS + " border-b border-rule bg-sunken/60"}
+      >
+        <div className={headerCellCls}>User</div>
+        <div className={headerCellCls}>Started</div>
+        <div className={headerCellCls}>Duration</div>
+        <div className={headerCellCls}>Tools</div>
+        <div className={headerCellCls}>Cost</div>
+        <div className={headerCellCls}>Flags</div>
+      </div>
+      <ul role="list" className="divide-y divide-rule">
+        {sessions.map((s) => (
+          <li key={s.id}>
+            <SessionRow session={s} gridCols={GRID_COLS} />
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
 
 export function SessionsTableEmpty() {
   return (
-    <div className="rounded border border-dashed border-rule bg-surface px-6 py-12 text-center">
-      <p className="font-mono text-caption uppercase tracking-wider text-ink-muted">
-        No sessions yet
-      </p>
-      <p className="mt-2 text-sm text-ink-muted">
-        Run{" "}
-        <code className="rounded-sm bg-sunken px-1.5 py-0.5 font-mono text-ink">receipt init</code>{" "}
-        in your terminal.
-      </p>
-    </div>
-  )
-}
-
-export function SessionsTableSkeleton() {
-  const rows = Array.from({ length: 5 })
-  return (
-    <div className="overflow-hidden rounded border border-rule bg-surface">
-      <table className="min-w-full border-collapse">
-        <thead className="border-b border-rule bg-sunken/60">
-          <tr>
-            <th className={headerCls} scope="col">User</th>
-            <th className={headerCls} scope="col">Started</th>
-            <th className={headerCls} scope="col">Duration</th>
-            <th className={headerCls} scope="col">Tools</th>
-            <th className={headerCls} scope="col">Cost</th>
-            <th className={headerCls} scope="col">Flags</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((_, i) => (
-            <tr key={i} className="border-b border-rule last:border-b-0">
-              {Array.from({ length: 6 }).map((__, j) => (
-                <td key={j} className="px-3 py-3">
-                  <div className="h-3 w-full max-w-[10rem] animate-pulse rounded-sm bg-sunken" />
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <EmptyState
+      heading="No sessions yet"
+      body="Run `receipt init` in your terminal."
+      action={
+        <code className="rounded-sm bg-sunken px-2 py-1 font-mono text-caption text-ink">
+          receipt init
+        </code>
+      }
+    />
   )
 }

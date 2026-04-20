@@ -24,6 +24,126 @@ from .models import (
     TrailSession,
 )
 
+# Tool-name classes for path/content extraction (v1 timeline enrichment).
+_FILE_TOOLS = frozenset({"Read", "Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+
+def _enrich_events(events_asc: list[Event]) -> list[EventOut]:
+    """Compute tool/path/content/duration_ms/group_key per event for the frontend
+    timeline. Pure serialization-time enrichment — nothing persists to the DB."""
+    out: list[EventOut] = []
+    n = len(events_asc)
+    for i, e in enumerate(events_asc):
+        raw = e.raw if isinstance(e.raw, dict) else {}
+        tool_input = raw.get("tool_input") if isinstance(raw.get("tool_input"), dict) else {}
+        tool = e.tool or (raw.get("tool_name") if isinstance(raw.get("tool_name"), str) else None)
+        path = e.path
+        if path is None:
+            if tool in _FILE_TOOLS and isinstance(tool_input.get("file_path"), str):
+                path = tool_input["file_path"]
+            elif tool == "Bash" and isinstance(tool_input.get("command"), str):
+                path = tool_input["command"][:80]
+            elif tool == "Grep" and isinstance(tool_input.get("pattern"), str):
+                path = tool_input["pattern"]
+            elif tool == "WebSearch" and isinstance(tool_input.get("query"), str):
+                path = tool_input["query"]
+        content = e.content
+        if content is None:
+            src = None
+            if tool == "Bash":
+                src = tool_input.get("command")
+            elif tool == "Edit":
+                src = tool_input.get("old_string")
+            elif tool == "Write":
+                src = tool_input.get("content")
+            elif tool == "Grep":
+                src = tool_input.get("pattern")
+            elif tool == "Read":
+                src = tool_input.get("file_path")
+            elif tool == "WebSearch":
+                src = tool_input.get("query")
+            elif tool == "WebFetch":
+                src = tool_input.get("url")
+            elif tool == "Task":
+                src = tool_input.get("description")
+            elif tool == "TodoWrite":
+                todos = tool_input.get("todos")
+                if isinstance(todos, list) and todos:
+                    first = todos[0]
+                    if isinstance(first, dict):
+                        src = first.get("content") or first.get("activeForm")
+            if isinstance(src, str):
+                content = src[:200]
+            elif content is None and isinstance(tool, str) and tool_input:
+                # Generic fallback for MCP tools and anything else:
+                # pick the first non-empty string value from tool_input, prefixed by its key.
+                try:
+                    for k, v in tool_input.items():
+                        if isinstance(v, str) and v.strip():
+                            content = f"{k}={v}"[:200]
+                            break
+                        elif isinstance(v, (int, float, bool)) and v is not None:
+                            content = f"{k}={v}"[:200]
+                            break
+                        elif isinstance(v, (list, dict)) and v:
+                            import json as _json
+                            content = f"{k}={_json.dumps(v)}"[:200]
+                            break
+                except Exception:
+                    pass
+        duration_ms: Optional[int] = None
+        if i < n - 1:
+            duration_ms = int(round((events_asc[i + 1].ts - e.ts).total_seconds() * 1000))
+        group_key = f"{tool}:{(path or content or '')[:40]}"
+        # Extract tool_response preview for timeline. Shapes by tool type:
+        # - Bash: dict{stdout,stderr,error}
+        # - Read: dict{content}
+        # - Edit/Write: dict{message|content}
+        # - MCP tools (mcp__*): list[{type:"text", text:"..."}]
+        # - Sometimes plain string.
+        output: Optional[str] = None
+        tr = raw.get("tool_response")
+        if isinstance(tr, dict):
+            parts = []
+            if isinstance(tr.get("stdout"), str) and tr["stdout"]:
+                parts.append(tr["stdout"])
+            if isinstance(tr.get("stderr"), str) and tr["stderr"]:
+                parts.append(tr["stderr"])
+            if isinstance(tr.get("error"), str) and tr["error"]:
+                parts.append(f"error: {tr['error']}")
+            if isinstance(tr.get("content"), str) and tr["content"]:
+                parts.append(tr["content"])
+            if isinstance(tr.get("message"), str) and tr["message"]:
+                parts.append(tr["message"])
+            blob = "\n".join(parts).strip()
+            if blob:
+                output = blob[:800]
+        elif isinstance(tr, list) and tr:
+            # MCP shape: list of {type:"text", text:"..."} items.
+            parts = []
+            for item in tr:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    t = item.get("text")
+                    if isinstance(t, str):
+                        parts.append(t)
+                elif isinstance(item, str):
+                    parts.append(item)
+            blob = "\n".join(parts).strip()
+            if blob:
+                output = blob[:800]
+        elif isinstance(tr, str) and tr.strip():
+            output = tr[:800]
+        out.append(EventOut.model_validate({
+            **e.model_dump(),
+            "tool": tool,
+            "path": path,
+            "content": content,
+            "duration_ms": duration_ms,
+            "group_key": group_key,
+            "output": output,
+        }))
+    return out
+
 
 class SessionsRouter:
     """Read endpoints for Receipt sessions (list + detail)."""
@@ -109,7 +229,7 @@ class SessionsRouter:
         ).all()
         events_asc = list(reversed(recent))
 
-        events_out = [EventOut.model_validate(e.model_dump()) for e in events_asc]
+        events_out = _enrich_events(events_asc)
         return SessionDetail.model_validate(
             {**row.model_dump(), "events": events_out}
         )
@@ -143,7 +263,7 @@ class SessionsRouter:
         )
         return TrailOut(
             session=TrailSession.model_validate(row.model_dump()),
-            events=[EventOut.model_validate(e.model_dump()) for e in events],
+            events=_enrich_events(list(events)),
             exported_at=datetime.now(timezone.utc),
             schema_version="v0",
         )

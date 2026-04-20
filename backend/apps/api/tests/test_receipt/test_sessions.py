@@ -227,6 +227,94 @@ def test_detail_401_without_bearer(client, db_session):
     assert resp.status_code == 401
 
 
+def test_detail_events_enriched_fields(client, db_session, alice_headers):
+    """3-event session returns EventOut entries with group_key + duration_ms."""
+    db_session.add(SessionRow(id="en1", user="alice", started_at=BASE_TS))
+    db_session.add(Event(
+        session_id="en1",
+        ts=BASE_TS + timedelta(seconds=0),
+        kind="tool_use", tool="Bash", flags=[],
+        raw={"tool_name": "Bash", "tool_input": {"command": "ls -la /tmp"}},
+    ))
+    db_session.add(Event(
+        session_id="en1",
+        ts=BASE_TS + timedelta(seconds=1),
+        kind="tool_use", tool="Read", flags=[],
+        raw={"tool_input": {"file_path": "/Users/x/README.md"}},
+    ))
+    db_session.add(Event(
+        session_id="en1",
+        ts=BASE_TS + timedelta(seconds=3),
+        kind="tool_use", tool="Edit", flags=[],
+        raw={"tool_input": {"file_path": "/Users/x/app.py", "old_string": "foo"}},
+    ))
+    db_session.commit()
+
+    resp = client.get("/api/v1/sessions/en1", headers=alice_headers)
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert len(events) == 3
+    for e in events:
+        assert e["group_key"]
+    assert events[0]["tool"] == "Bash"
+    assert events[0]["path"] == "ls -la /tmp"
+    assert events[0]["content"] == "ls -la /tmp"
+    assert events[0]["duration_ms"] == 1000
+    assert events[1]["tool"] == "Read"
+    assert events[1]["path"] == "/Users/x/README.md"
+    assert events[1]["duration_ms"] == 2000
+    assert events[2]["duration_ms"] is None
+
+
+def test_session_end_triggers_auto_summary(engine, db_session, mint_token):
+    """Ingest batch with kind='session_end' → /summary returns 200 (not 404)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlmodel import Session as SQLSession
+
+    from apps.api.api.routers.receipt.db import get_session
+    from apps.api.api.routers.receipt.events_router import EventsRouter
+    from apps.api.api.routers.receipt.summary_router import SummaryRouter
+
+    _app = FastAPI()
+    _app.include_router(EventsRouter().get_router(), prefix="/api/v1")
+    _app.include_router(SummaryRouter().get_router(), prefix="/api/v1")
+
+    def _override():
+        with SQLSession(engine) as s:
+            yield s
+
+    _app.dependency_overrides[get_session] = _override
+    c = TestClient(_app)
+
+    _, h = mint_token("alice")
+    batch = {
+        "events": [
+            {
+                "session_id": "ae1",
+                "user": "alice",
+                "kind": "tool_use",
+                "tool": "Bash",
+                "ts": BASE_TS.isoformat(),
+            },
+            {
+                "session_id": "ae1",
+                "user": "alice",
+                "kind": "session_end",
+                "ts": (BASE_TS + timedelta(seconds=5)).isoformat(),
+            },
+        ]
+    }
+    ing = c.post("/api/v1/sessions/events", json=batch)
+    assert ing.status_code == 202
+
+    resp = c.get("/api/v1/sessions/ae1/summary", headers=h)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["session_id"] == "ae1"
+    assert body["summary"].count("\n") == 2  # 3-line determinstic summary
+
+
 def test_detail_event_cap(client, db_session, alice_headers):
     """1005 events seeded → response returns the 1000 most recent, ASC.
 

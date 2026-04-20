@@ -4,8 +4,11 @@ import { createBrowserRouter, RouterProvider } from "react-router-dom"
 import { AuthProvider } from "./auth/AuthProvider"
 import { RequireAuth } from "./auth/RequireAuth"
 import { AppShell } from "./components/AppShell"
-import { ToasterProvider } from "./components/Toaster"
+import { Toaster } from "./components/Toaster"
 import { AuthCallback } from "./pages/AuthCallback"
+import { BillingCancelPage } from "./pages/BillingCancelPage"
+import { BillingPage } from "./pages/BillingPage"
+import { BillingSuccessPage } from "./pages/BillingSuccessPage"
 import { NotFound } from "./pages/NotFound"
 import { SessionDetailPage } from "./pages/SessionDetailPage"
 import { SessionsListPage } from "./pages/SessionsListPage"
@@ -26,6 +29,10 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <SessionsListPage /> },
       { path: "/s/:id", element: <SessionDetailPage /> },
+      // TODO: nest under a /settings shell once US-21 tabs land.
+      { path: "/settings/billing", element: <BillingPage /> },
+      { path: "/billing/success", element: <BillingSuccessPage /> },
+      { path: "/billing/cancel", element: <BillingCancelPage /> },
     ],
   },
   { path: "*", element: <NotFound /> },
@@ -35,10 +42,9 @@ export function Root() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <ToasterProvider>
-          <RouterProvider router={router} />
-          {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
-        </ToasterProvider>
+        <RouterProvider router={router} />
+        <Toaster />
+        {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
       </AuthProvider>
     </QueryClientProvider>
   )

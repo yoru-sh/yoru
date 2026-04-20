@@ -25,11 +25,8 @@ def test_health_liveness_is_200_and_body_ok():
     assert r.json() == {"status": "ok"}
 
 
-def test_health_ready_is_200_when_db_reachable():
-    with TestClient(app) as client:
-        r = client.get("/health/ready")
-    assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+# /health/ready coverage: test_health_ready_depth.py (wave-13-C4 — 3-probe
+# breakdown requires a real file-backed engine, not this module's :memory:).
 
 
 def test_version_returns_version_and_python_keys():

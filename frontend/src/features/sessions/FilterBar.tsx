@@ -15,9 +15,10 @@ function updateParam(
 const labelCls =
   "flex flex-col gap-1 font-mono text-micro uppercase tracking-wider text-ink-faint"
 const inputCls =
-  "h-8 rounded-sm border border-rule bg-surface px-2 " +
+  "h-8 w-full rounded-sm border border-rule bg-surface px-2 " +
   "font-mono text-caption text-ink placeholder:text-ink-faint " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 " +
+  "focus-visible:ring-offset-2 focus-visible:ring-offset-paper " +
   "disabled:opacity-50"
 
 export function FilterBar() {
@@ -29,7 +30,6 @@ export function FilterBar() {
   const flagOnly = params.get("flag") === "1"
   const minCostParam = params.get("min_cost") ?? ""
 
-  // Local mirror for the text input so we can debounce URL writes.
   const [userDraft, setUserDraft] = useState(userParam)
   useEffect(() => setUserDraft(userParam), [userParam])
 
@@ -56,9 +56,9 @@ export function FilterBar() {
   return (
     <section
       aria-label="Filter sessions"
-      className="flex flex-wrap items-end gap-4 rounded border border-rule bg-surface p-4"
+      className="flex flex-col gap-3 border-b border-rule pb-4 sm:flex-row sm:flex-wrap sm:items-end sm:gap-4"
     >
-      <label className={labelCls}>
+      <label className={labelCls + " w-full sm:w-52"}>
         <span>User</span>
         <input
           type="search"
@@ -66,31 +66,31 @@ export function FilterBar() {
           value={userDraft}
           onChange={(e) => setUserDraft(e.target.value)}
           placeholder="alice@acme.dev"
-          className={inputCls + " w-52"}
+          className={inputCls}
         />
       </label>
 
-      <label className={labelCls}>
+      <label className={labelCls + " w-full sm:w-40"}>
         <span>From</span>
         <input
           type="date"
           value={fromParam}
           onChange={(e) => setOne("from", e.target.value || null)}
-          className={inputCls + " w-40"}
+          className={inputCls}
         />
       </label>
 
-      <label className={labelCls}>
+      <label className={labelCls + " w-full sm:w-40"}>
         <span>To</span>
         <input
           type="date"
           value={toParam}
           onChange={(e) => setOne("to", e.target.value || null)}
-          className={inputCls + " w-40"}
+          className={inputCls}
         />
       </label>
 
-      <label className={labelCls}>
+      <label className={labelCls + " w-full sm:w-28"}>
         <span>Min cost ($)</span>
         <input
           type="number"
@@ -99,7 +99,7 @@ export function FilterBar() {
           value={minCostParam}
           onChange={(e) => setOne("min_cost", e.target.value || null)}
           placeholder="0.00"
-          className={inputCls + " w-28"}
+          className={inputCls}
         />
       </label>
 
@@ -108,7 +108,7 @@ export function FilterBar() {
           type="checkbox"
           checked={flagOnly}
           onChange={(e) => setOne("flag", e.target.checked ? "1" : null)}
-          className="h-4 w-4 cursor-pointer accent-accent-500"
+          className="h-4 w-4 cursor-pointer rounded-sm accent-accent-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
         />
         <span>Flagged only</span>
       </label>
@@ -118,10 +118,11 @@ export function FilterBar() {
         onClick={clearAll}
         disabled={!anyActive}
         className={
-          "ml-auto h-8 rounded-sm border border-rule px-3 " +
+          "h-8 w-full rounded-sm border border-rule px-3 sm:ml-auto sm:w-auto " +
           "font-mono text-micro uppercase tracking-wider text-ink-muted " +
           "hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-40 " +
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 " +
+          "focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
         }
       >
         Clear

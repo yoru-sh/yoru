@@ -5,6 +5,13 @@ import { useSession } from "../auth/useSession"
 
 const RESEND_COOLDOWN_SECONDS = 60
 
+const INPUT_CLASS =
+  "mt-1 w-full rounded border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 " +
+  "focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+
+const LABEL_CLASS = "font-mono text-micro uppercase tracking-wider text-ink-faint"
+
 function buildRedirectTo(next: string | null): string {
   const base = `${window.location.origin}/auth/callback`
   if (!next || next === "/") return base
@@ -26,6 +33,8 @@ export function SignInPage() {
   const tokenExpired = searchParams.get("reason") === "token-expired"
 
   const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [mode, setMode] = useState<"magic" | "password">("magic")
   const [sent, setSent] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -59,9 +68,21 @@ export function SignInPage() {
     setCooldown(RESEND_COOLDOWN_SECONDS)
   }
 
+  async function signInPassword() {
+    setErr(null)
+    setSubmitting(true)
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    setSubmitting(false)
+    if (error) {
+      setErr(friendlyError(error))
+      return
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
-    await sendLink()
+    if (mode === "password") await signInPassword()
+    else await sendLink()
   }
 
   async function onResend() {
@@ -71,29 +92,37 @@ export function SignInPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-paper px-4">
-      <div className="w-full max-w-sm rounded-lg border border-rule bg-surface p-6 shadow-sm">
-        <h1 className="font-mono text-lg font-semibold text-ink">receipt</h1>
-        <p className="mt-1 text-caption text-ink-muted">Audit receipts for your AI coding sessions.</p>
+      <div className="w-full max-w-sm rounded border border-rule bg-surface p-6 shadow-sm">
+        <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink">receipt</h1>
+        <p className="mt-2 font-mono text-micro uppercase tracking-wider text-ink-faint">
+          Audit receipts · AI coding sessions
+        </p>
 
         {tokenExpired && !sent && (
           <div
             role="status"
-            className="mt-4 rounded border border-rule bg-sunken px-3 py-2 text-caption text-ink"
+            className="mt-5 border-l-2 border-accent-500 bg-sunken px-3 py-2 text-sm text-ink"
           >
-            Your session expired — sign in again to continue.
+            <span className="font-mono text-micro uppercase tracking-wider text-ink-muted">
+              Session expired
+            </span>
+            <p className="mt-0.5">Sign in again to continue.</p>
           </div>
         )}
 
         {sent ? (
-          <div className="mt-6 space-y-3">
+          <div className="mt-6 space-y-3" role="status" aria-label="Magic link sent">
+            <p className="font-mono text-micro uppercase tracking-wider text-ink-faint">
+              Link sent
+            </p>
             <p className="text-sm text-ink">
-              Check <span className="font-medium">{email}</span> for a sign-in link.
+              Check <span className="font-mono text-ink">{email}</span> for a sign-in link.
             </p>
             <button
               type="button"
               onClick={() => { void onResend() }}
               disabled={cooldown > 0 || submitting}
-              className="w-full rounded border border-rule px-3 py-2 text-sm text-ink-muted hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 disabled:opacity-50"
+              className="w-full rounded border border-rule px-3 py-2 text-sm text-ink-muted hover:bg-sunken hover:text-ink outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
             >
               {submitting
                 ? "Resending…"
@@ -101,30 +130,68 @@ export function SignInPage() {
                   ? `Resend in ${cooldown}s`
                   : "Resend link"}
             </button>
-            {err && <p className="text-caption text-flag-env">{err}</p>}
+            {err && (
+              <div
+                role="alert"
+                className="border-l-2 border-flag-env bg-flag-env/5 px-3 py-2 text-sm text-ink"
+              >
+                <span className="font-mono text-ink-muted">[ERR]</span> {err}
+              </div>
+            )}
           </div>
         ) : (
           <form onSubmit={onSubmit} className="mt-6 space-y-3">
             <label className="block">
-              <span className="text-caption text-ink-muted">Email</span>
+              <span className={LABEL_CLASS}>Email</span>
               <input
                 type="email"
                 required
                 autoFocus
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 w-full rounded border border-rule bg-paper px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent-500"
+                className={INPUT_CLASS}
                 placeholder="you@company.dev"
               />
             </label>
+            {mode === "password" && (
+              <label className="block">
+                <span className={LABEL_CLASS}>Password</span>
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={INPUT_CLASS}
+                  placeholder="••••••••"
+                />
+              </label>
+            )}
             <button
               type="submit"
               disabled={submitting}
-              className="w-full rounded bg-accent-500 px-3 py-2 text-sm font-medium text-primary-950 hover:bg-accent-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 disabled:opacity-50"
+              className="w-full rounded bg-accent-500 px-3 py-2 text-sm font-medium text-primary-950 hover:bg-accent-400 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
             >
-              {submitting ? "Sending…" : "Send magic link"}
+              {submitting ? "Signing in…" : mode === "password" ? "Sign in" : "Send magic link"}
             </button>
-            {err && <p className="text-caption text-flag-env">{err}</p>}
+            {err && (
+              <div
+                role="alert"
+                className="border-l-2 border-flag-env bg-flag-env/5 px-3 py-2 text-sm text-ink"
+              >
+                <span className="font-mono text-ink-muted">[ERR]</span> {err}
+              </div>
+            )}
+            {import.meta.env.DEV && (
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={() => setMode(mode === "password" ? "magic" : "password")}
+                  className="rounded-sm text-caption text-ink-muted underline underline-offset-2 outline-none hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+                >
+                  {mode === "password" ? "Use magic link instead" : "Dev sign-in (password)"}
+                </button>
+              </div>
+            )}
           </form>
         )}
       </div>

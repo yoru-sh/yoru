@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query"
 import { getSummary } from "../../lib/api"
 import { formatRelative } from "../../lib/format"
 import type { Summary } from "../../types/receipt"
+import { Skeleton } from "../../components/ui/Skeleton"
 
 interface SummaryCardProps {
   sessionId: string
@@ -14,15 +15,13 @@ export function SummaryCard({ sessionId }: SummaryCardProps) {
   })
 
   return (
-    <section
-      aria-label="Session summary"
-      className="rounded border border-rule bg-surface p-4"
-    >
+    <section aria-label="Session summary" className="px-4 py-4">
       {query.isPending ? (
         <SummarySkeleton />
       ) : query.isError ? (
-        <p className="font-mono text-caption text-flag-env-fg">
-          Couldn't load summary.
+        <p role="alert" className="font-mono text-caption text-flag-env-fg">
+          <span className="mr-1 font-semibold">[ERR]</span>
+          Couldn&apos;t load summary.
         </p>
       ) : (
         <>
@@ -38,11 +37,10 @@ export function SummaryCard({ sessionId }: SummaryCardProps) {
 
 function SummarySkeleton() {
   return (
-    <div className="space-y-2" aria-hidden="true">
-      <div className="h-3 w-11/12 animate-pulse rounded-sm bg-sunken" />
-      <div className="h-3 w-10/12 animate-pulse rounded-sm bg-sunken" />
-      <div className="h-3 w-8/12 animate-pulse rounded-sm bg-sunken" />
-      <div className="mt-3 h-2.5 w-44 animate-pulse rounded-sm bg-sunken" />
+    <div role="status" aria-label="Loading summary" className="space-y-2">
+      <Skeleton.Line decorative className="w-3/4" />
+      <Skeleton.Line decorative className="w-full" />
+      <Skeleton.Line decorative className="w-2/3" />
     </div>
   )
 }
