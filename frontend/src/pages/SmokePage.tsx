@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useState } from "react"
+import { EmptyState } from "../components/ui/EmptyState"
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8002/api/v1"
 
@@ -207,11 +208,6 @@ export function SmokePage() {
     setRunning(false)
   }, [setRow])
 
-  useEffect(() => {
-    void run()
-
-  }, [])
-
   return (
     <div className="min-h-screen bg-paper text-ink">
       <div className="mx-auto max-w-3xl p-6 font-mono">
@@ -231,6 +227,21 @@ export function SmokePage() {
         </p>
         {meta && <p className="mb-4 text-caption text-ink-faint break-all">{meta}</p>}
 
+        {rows.every((r) => r.status === "idle") && !running ? (
+          <EmptyState
+            heading="No probes ran yet"
+            body="Kick off a round-trip against every backend route."
+            action={
+              <button
+                type="button"
+                onClick={() => void run()}
+                className="rounded-sm border border-rule bg-surface px-3 py-1 font-mono text-caption uppercase tracking-wider text-ink hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+              >
+                Run smoke
+              </button>
+            }
+          />
+        ) : (
         <ol className="space-y-1">
           {rows.map((r, i) => (
             <li
@@ -259,6 +270,7 @@ export function SmokePage() {
             </li>
           ))}
         </ol>
+        )}
       </div>
     </div>
   )

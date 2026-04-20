@@ -3,15 +3,23 @@ import { useQuery } from "@tanstack/react-query"
 import { useSearchParams } from "react-router-dom"
 import { postCheckoutSession, type Plan } from "../lib/api"
 import { toast } from "../components/Toaster"
+import { EmptyState } from "../components/ui/EmptyState"
+
+interface Org {
+  id: string
+  slug: string
+}
 
 interface Me {
   plan: Plan
+  orgs: Org[] | null
 }
 
 // TODO: wire to real /api/v1/me endpoint (backend US-18 is pending).
-// Until then, stub returns { plan: "free" } so the Upgrade CTA slice is demoable.
+// Stub keeps one placeholder org so the Upgrade CTA slice stays demoable;
+// swap to `orgs: null` to preview the "no org context" empty state.
 async function fetchMe(): Promise<Me> {
-  return { plan: "free" }
+  return { plan: "free", orgs: [{ id: "stub-org", slug: "solo" }] }
 }
 
 const PLAN_LABELS: Record<Plan, string> = {
@@ -64,6 +72,8 @@ export function BillingPage() {
 
   const plan = data?.plan ?? "free"
   const showUpgradeCta = !isLoading && !isError && plan === "free"
+  const noOrgContext =
+    !isLoading && !isError && (!data?.orgs || data.orgs.length === 0)
 
   return (
     // TODO: nest inside /settings tabs shell once US-21 lands.
@@ -95,6 +105,25 @@ export function BillingPage() {
         </div>
       )}
 
+      {noOrgContext ? (
+        <section
+          aria-labelledby="no-org-heading"
+          className="rounded-sm border border-rule bg-surface p-4"
+        >
+          <h2 id="no-org-heading" className="sr-only">
+            No org context
+          </h2>
+          <EmptyState
+            heading="No org context"
+            body="Install the CLI and stream your first session to create an org."
+            action={
+              <code className="rounded-sm bg-sunken px-2 py-1 font-mono text-sm text-ink">
+                receipt init
+              </code>
+            }
+          />
+        </section>
+      ) : (
       <section
         aria-labelledby="current-plan-heading"
         className="rounded-sm border border-rule bg-surface p-4"
@@ -147,6 +176,7 @@ export function BillingPage() {
           </div>
         )}
       </section>
+      )}
     </div>
   )
 }
