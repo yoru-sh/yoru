@@ -43,7 +43,11 @@ export function AuthCallback() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-paper text-ink-muted">
+    <div
+      role="status"
+      aria-label="Signing you in"
+      className="flex min-h-screen items-center justify-center bg-paper text-ink-muted"
+    >
       <span>Signing you in…</span>
     </div>
   )

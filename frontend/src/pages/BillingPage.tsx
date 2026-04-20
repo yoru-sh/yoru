@@ -137,8 +137,9 @@ export function BillingPage() {
 
         {isLoading ? (
           <div role="status" aria-label="Loading plan" className="mt-3 space-y-2">
-            <div className="h-6 w-32 rounded-sm bg-sunken motion-safe:animate-pulse" />
-            <div className="h-4 w-2/3 rounded-sm bg-sunken motion-safe:animate-pulse" />
+            <div className="h-6 w-32 rounded-sm bg-sunken/60 motion-safe:animate-pulse" />
+            <div className="h-4 w-2/3 rounded-sm bg-sunken/60 motion-safe:animate-pulse" />
+            <div className="h-4 w-1/2 rounded-sm bg-sunken/60 motion-safe:animate-pulse" />
           </div>
         ) : isError ? (
           <p role="alert" className="mt-3 text-sm text-ink">

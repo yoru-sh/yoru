@@ -171,7 +171,9 @@ export function SignInPage() {
               disabled={submitting}
               className="w-full rounded bg-accent-500 px-3 py-2 text-sm font-medium text-primary-950 hover:bg-accent-400 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
             >
-              {submitting ? "Signing in…" : mode === "password" ? "Sign in" : "Send magic link"}
+              {submitting
+                ? mode === "password" ? "Signing in…" : "Sending…"
+                : mode === "password" ? "Sign in" : "Send magic link"}
             </button>
             {err && (
               <div

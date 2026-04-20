@@ -265,7 +265,13 @@ export function SmokePage() {
                 )}
               </div>
               <span className="pt-0.5 text-caption text-ink-muted">
-                {r.latency_ms !== undefined ? `${r.latency_ms}ms` : ""}
+                {r.status === "running" ? (
+                  <span
+                    role="status"
+                    aria-label="Probe running"
+                    className="inline-block h-3 w-10 rounded-sm bg-sunken/60 motion-safe:animate-pulse"
+                  />
+                ) : r.latency_ms !== undefined ? `${r.latency_ms}ms` : ""}
               </span>
             </li>
           ))}
