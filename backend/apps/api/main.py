@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from apps.api.api.core.errors import install_error_handlers
+from apps.api.api.middleware.security_headers import SecurityHeadersMiddleware
 from apps.api.api.middleware.structured_logging import (
     StructuredLoggingMiddleware,
     configure_structured_logger,
@@ -59,6 +60,11 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+# Security headers — innermost middleware (first add_middleware = last on
+# request, first on response). Stamps the 6-header bundle onto every response
+# before CORS layers its headers on top. wave-50 C3.
+app.add_middleware(SecurityHeadersMiddleware)
 
 _cors_origins = [
     o.strip()
