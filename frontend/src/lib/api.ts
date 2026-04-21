@@ -149,6 +149,19 @@ export async function listSessions(filters: Filters): Promise<SessionList> {
   }
 }
 
+// Lightweight count probe for the /welcome activation gate. Sends ?limit=1 so
+// the backend doesn't serialize a full page just to decide zero-vs-nonzero.
+export async function getSessionsCount(): Promise<{ total: number }> {
+  if (USE_MOCKS) {
+    const res = await mockListSessions({})
+    return { total: res.total }
+  }
+  const raw = await apiFetch<{ items: RawSession[]; total?: number }>(
+    `/sessions?limit=1`,
+  )
+  return { total: raw.total ?? (raw.items ?? []).length }
+}
+
 interface RawEvent {
   id: number
   ts: string

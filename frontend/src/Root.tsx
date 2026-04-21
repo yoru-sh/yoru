@@ -14,6 +14,7 @@ import { SessionDetailPage } from "./pages/SessionDetailPage"
 import { SessionsListPage } from "./pages/SessionsListPage"
 import { SignInPage } from "./pages/SignInPage"
 import { SmokePage } from "./pages/SmokePage"
+import { WelcomePage } from "./pages/WelcomePage"
 import { queryClient } from "./lib/queryClient"
 
 const router = createBrowserRouter([
@@ -28,6 +29,7 @@ const router = createBrowserRouter([
     ),
     children: [
       { path: "/", element: <SessionsListPage /> },
+      { path: "/welcome", element: <WelcomePage /> },
       { path: "/s/:id", element: <SessionDetailPage /> },
       // TODO: nest under a /settings shell once US-21 tabs land.
       { path: "/settings/billing", element: <BillingPage /> },

@@ -10,7 +10,7 @@ export function AuthCallback() {
   const [params] = useSearchParams()
   const [timedOut, setTimedOut] = useState(false)
 
-  const next = params.get("next") || "/"
+  const next = params.get("next") || "/welcome"
 
   useEffect(() => {
     if (!loading && session) {
