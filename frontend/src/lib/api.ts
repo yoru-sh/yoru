@@ -6,6 +6,7 @@ import type {
   Summary,
 } from "../types/receipt"
 import { mockListSessions, mockGetSession, mockGetSummary } from "../mocks/sessions"
+import { queryClient } from "./queryClient"
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === "1"
 const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:8002/api/v1"
@@ -15,6 +16,20 @@ export class ApiError extends Error {
     super(`API ${status}: ${body}`)
   }
 }
+
+// Billing plan lives here (not further down) because the 402 interceptor
+// below must prime the shared ['orgs','me'] cache shape.
+export type Plan = "free" | "team" | "org"
+
+// Shared cache shape for ['orgs','me'] — single source of truth for the
+// authenticated org's plan + quota state (US-V4-1 AC #6). Siblings
+// (post-upgrade poll, plan badge) can widen as needed.
+export interface OrgsMe {
+  plan: Plan
+  quota_exceeded: boolean
+}
+
+export const ORGS_ME_KEY = ["orgs", "me"] as const
 
 let tokenExpiredHandled = false
 
@@ -69,6 +84,15 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       void supabase.auth.signOut().finally(() => {
         window.location.assign("/signin?reason=token-expired")
       })
+    }
+    if (res.status === 402) {
+      // Quota paywall — prime the ['orgs','me'] cache so <UpgradeBanner/>
+      // renders without waiting for a /orgs/me refetch (US-V4-1 AC #6:
+      // single source of truth).
+      queryClient.setQueryData<OrgsMe | undefined>(
+        ORGS_ME_KEY,
+        (prev) => ({ plan: "free", ...prev, quota_exceeded: true }),
+      )
     }
     throw new ApiError(res.status, text)
   }
@@ -199,7 +223,8 @@ export async function getSummary(id: string): Promise<Summary> {
 }
 
 // Billing — mirror of C1 backend shapes (BILLING-PLANS-V1.md §3).
-export type Plan = "free" | "team" | "org"
+// (`Plan`, `OrgsMe`, `ORGS_ME_KEY` are declared near the top so the 402
+// interceptor in apiFetch can reference them.)
 
 export interface CheckoutRequest {
   plan: Plan

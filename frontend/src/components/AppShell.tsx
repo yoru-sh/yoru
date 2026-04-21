@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { Link, Outlet, useNavigate } from "react-router-dom"
 import { useSession } from "../auth/useSession"
+import { UpgradeBanner } from "../features/billing/UpgradeBanner"
 
 export function AppShell() {
   const { session, signOut } = useSession()
@@ -59,6 +60,7 @@ export function AppShell() {
         </div>
       </header>
       <main id="main" className="mx-auto max-w-6xl px-6 py-6">
+        <UpgradeBanner />
         <Outlet />
       </main>
     </div>
