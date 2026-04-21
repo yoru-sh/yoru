@@ -72,6 +72,19 @@ class HookToken(SQLModel, table=True):
     revoked_at: Optional[datetime] = None
 
 
+class User(SQLModel, table=True):
+    """Per-user activation state (wave-54 Hour-0).
+
+    Receipt v0 carries identity through `HookToken.user` (an email-string).
+    This row exists to dedupe one-shot lifecycle emails (welcome, future
+    digests) — it's lazily upserted on the first activation event.
+    """
+    __tablename__ = "users"
+
+    email: str = Field(primary_key=True, max_length=320)
+    welcome_email_sent_at: Optional[datetime] = Field(default=None)
+
+
 class PasswordResetToken(SQLModel, table=True):
     """Single-use password-reset token (wave-14 C4; feature-flagged off by default).
 
@@ -252,6 +265,14 @@ class PasswordResetConfirmIn(SQLModel):
 
 class PasswordResetConfirmOut(SQLModel):
     reset: str
+
+
+# ---------- Welcome email (wave-54 ACTIVATION Hour-0) ----------
+
+class WelcomeEmailOut(SQLModel):
+    sent: bool
+    user_email: str
+    welcome_email_sent_at: datetime
 
 
 # ---------- Team dashboard ----------

@@ -32,6 +32,7 @@ from sqlmodel import select
 from .auth_sessions_model import AuthSession
 from .db import get_session
 from .deps import _naive_utc_now, require_current_user
+from .email.welcome import send_welcome_email
 from .models import (
     HookToken,
     HookTokenListItem,
@@ -42,7 +43,14 @@ from .models import (
     PasswordResetRequestIn,
     PasswordResetRequestOut,
     PasswordResetToken,
+    User,
+    WelcomeEmailOut,
 )
+
+# Idempotency window for /auth/welcome-email — second call inside this
+# window after a successful send is a no-op (returns sent=False with the
+# original timestamp). Matches the wave-54 task brief acceptance criteria.
+_WELCOME_EMAIL_DEDUPE_WINDOW = timedelta(minutes=5)
 
 _TOKEN_PREFIX = "rcpt_"
 _BEARER_PREFIX = "Bearer "
@@ -157,6 +165,10 @@ class AuthRouter:
             "/password-reset-confirm",
             response_model=PasswordResetConfirmOut,
         )(self.password_reset_confirm)
+        self.router.post(
+            "/welcome-email",
+            response_model=WelcomeEmailOut,
+        )(self.welcome_email)
 
     def mint_token(
         self,
@@ -431,6 +443,49 @@ class AuthRouter:
             flush=True,
         )
         return PasswordResetRequestOut(sent=True)
+
+    def welcome_email(
+        self,
+        db: DBSession = Depends(get_session),
+        current_user: str = Depends(require_current_user),
+    ) -> WelcomeEmailOut:
+        """Fire the welcome / install-snippet email for the caller.
+
+        Idempotent: the second call within `_WELCOME_EMAIL_DEDUPE_WINDOW`
+        returns `sent=False` with the original `welcome_email_sent_at` and
+        does NOT re-send. Lazily upserts the `users` row keyed by email.
+
+        The frontend calls this once after first sign-in (Supabase magic-link
+        provides email → bearer; bearer scopes the call to the caller, so no
+        cross-user concern). Stub vs SMTP delivery is decided inside
+        `send_welcome_email` based on `SMTP_HOST` env.
+        """
+        now = _naive_utc_now()
+        row = db.get(User, current_user)
+        if (
+            row is not None
+            and row.welcome_email_sent_at is not None
+            and (now - row.welcome_email_sent_at) < _WELCOME_EMAIL_DEDUPE_WINDOW
+        ):
+            return WelcomeEmailOut(
+                sent=False,
+                user_email=current_user,
+                welcome_email_sent_at=row.welcome_email_sent_at,
+            )
+
+        send_welcome_email(current_user)
+
+        if row is None:
+            row = User(email=current_user, welcome_email_sent_at=now)
+        else:
+            row.welcome_email_sent_at = now
+        db.add(row)
+        db.commit()
+        return WelcomeEmailOut(
+            sent=True,
+            user_email=current_user,
+            welcome_email_sent_at=now,
+        )
 
     def password_reset_confirm(
         self,

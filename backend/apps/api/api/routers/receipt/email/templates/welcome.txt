@@ -1,0 +1,15 @@
+Subject: Welcome to Receipt — your install snippet
+
+Hi {{user_email}},
+
+Receipt is ready when you are. Three lines and your next Claude Code
+session lands on the dashboard:
+
+    pip install receipt-cli
+    receipt init
+    claude
+
+That's it. Your first Receipt should appear within ~60 seconds of
+running `claude`. If it doesn't, reply to this email and we'll dig in.
+
+— Receipt
