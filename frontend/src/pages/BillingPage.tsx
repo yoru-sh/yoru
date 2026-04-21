@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useEffect, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSearchParams } from "react-router-dom"
 import { postCheckoutSession, type Plan } from "../lib/api"
 import { toast } from "../components/Toaster"
@@ -35,20 +35,50 @@ const PLAN_SUMMARIES: Record<Plan, string> = {
   org: "Unlimited seats · unlimited events (rate-limited) · SSO & SCIM.",
 }
 
+const ORGS_ME_KEY = ["orgs", "me"] as const
+const POLL_INTERVAL_MS = 2000
+const POLL_TIMEOUT_MS = 15000
+
 export function BillingPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const [banner, setBanner] = useState(() => searchParams.get("upgraded") === "1")
+  const upgradedFlag = searchParams.get("upgraded") === "1"
+  const [banner, setBanner] = useState(() => upgradedFlag)
   const [upgrading, setUpgrading] = useState(false)
+  const [pollTimedOut, setPollTimedOut] = useState(false)
+  const queryClient = useQueryClient()
 
   const { data, isLoading, isError } = useQuery<Me>({
-    queryKey: ["me"],
+    queryKey: [...ORGS_ME_KEY],
     queryFn: fetchMe,
-    refetchInterval: banner ? 3000 : false,
   })
 
+  const plan = data?.plan ?? "free"
+  // Stop banner as soon as plan flips off free (polling effect reads live data via closure).
   if (banner && data && data.plan !== "free") {
     setBanner(false)
   }
+
+  // Post-checkout polling: invalidate ['orgs','me'] every 2s for up to 15s.
+  // Short-circuits early when the webhook flips org.plan off 'free'.
+  useEffect(() => {
+    if (!upgradedFlag) return
+    if (plan !== "free") return
+    if (pollTimedOut) return
+
+    const interval = setInterval(() => {
+      void queryClient.invalidateQueries({ queryKey: [...ORGS_ME_KEY] })
+    }, POLL_INTERVAL_MS)
+
+    const timeout = setTimeout(() => {
+      clearInterval(interval)
+      setPollTimedOut(true)
+    }, POLL_TIMEOUT_MS)
+
+    return () => {
+      clearInterval(interval)
+      clearTimeout(timeout)
+    }
+  }, [upgradedFlag, plan, pollTimedOut, queryClient])
 
   async function onUpgradeClick() {
     if (upgrading) return
@@ -71,10 +101,14 @@ export function BillingPage() {
     setSearchParams(next, { replace: true })
   }
 
-  const plan = data?.plan ?? "free"
+  function refreshNow() {
+    void queryClient.invalidateQueries({ queryKey: [...ORGS_ME_KEY] })
+  }
+
   const showUpgradeCta = !isLoading && !isError && plan === "free"
   const noOrgContext =
     !isLoading && !isError && (!data?.orgs || data.orgs.length === 0)
+  const showTimeoutBanner = upgradedFlag && pollTimedOut && plan === "free"
 
   return (
     // TODO: nest inside /settings tabs shell once US-21 lands.
@@ -85,11 +119,21 @@ export function BillingPage() {
         </div>
       )}
 
-      <header className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight text-ink">Billing</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Manage your Receipt plan and billing details.
-        </p>
+      <header className="mb-6 flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">Billing</h1>
+          <p className="mt-1 text-sm text-ink-muted">
+            Manage your Receipt plan and billing details.
+          </p>
+        </div>
+        {!isLoading && !isError && (
+          <span
+            data-testid="plan-badge"
+            className="shrink-0 rounded-sm border border-rule px-2 py-1 font-mono uppercase text-caption tracking-wider text-ink"
+          >
+            {plan}
+          </span>
+        )}
       </header>
 
       {banner && (
@@ -111,6 +155,8 @@ export function BillingPage() {
           </button>
         </div>
       )}
+
+      {showTimeoutBanner && <TimeoutBanner onRefresh={refreshNow} />}
 
       {noOrgContext ? (
         <section
@@ -185,6 +231,28 @@ export function BillingPage() {
         )}
       </section>
       )}
+    </div>
+  )
+}
+
+function TimeoutBanner({ onRefresh }: { onRefresh: () => void }) {
+  return (
+    <div
+      role="alert"
+      data-testid="billing-poll-timeout"
+      className="mb-6 flex items-start justify-between gap-4 rounded-sm border border-rule border-l-2 border-l-flag-migration bg-surface px-3 py-2 text-sm text-ink"
+    >
+      <div>
+        <span className="mr-2 font-mono uppercase text-caption text-ink-muted">WARN</span>
+        We&apos;re processing your payment — refresh in a minute.
+      </div>
+      <button
+        type="button"
+        onClick={onRefresh}
+        className="shrink-0 rounded-sm border border-rule px-2 py-1 text-sm text-ink hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+      >
+        Refresh now
+      </button>
     </div>
   )
 }
