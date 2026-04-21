@@ -9,6 +9,7 @@ import { AuthCallback } from "./pages/AuthCallback"
 import { BillingCancelPage } from "./pages/BillingCancelPage"
 import { BillingPage } from "./pages/BillingPage"
 import { BillingSuccessPage } from "./pages/BillingSuccessPage"
+import { DocsInstallPage } from "./pages/DocsInstallPage"
 import { NotFound } from "./pages/NotFound"
 import { SessionDetailPage } from "./pages/SessionDetailPage"
 import { SessionsListPage } from "./pages/SessionsListPage"
@@ -20,6 +21,7 @@ import { queryClient } from "./lib/queryClient"
 const router = createBrowserRouter([
   { path: "/signin", element: <SignInPage /> },
   { path: "/auth/callback", element: <AuthCallback /> },
+  { path: "/docs/install", element: <DocsInstallPage /> },
   { path: "/__smoke", element: <SmokePage /> },
   {
     element: (
