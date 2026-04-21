@@ -34,6 +34,7 @@ from apps.api.api.routers.receipt.auth_router import AuthRouter
 from apps.api.api.routers.receipt.dashboard_router import DashboardRouter
 from apps.api.api.routers.receipt.db import init_db
 from apps.api.api.routers.receipt.events_router import EventsRouter
+from apps.api.api.routers.receipt.export_router import ExportRouter
 from apps.api.api.routers.receipt.health_deep_router import HealthDeepRouter
 from apps.api.api.routers.receipt.sessions_router import SessionsRouter
 from apps.api.api.routers.receipt.summary_router import SummaryRouter
@@ -115,6 +116,11 @@ app.include_router(ping_router.get_router())
 events_router = EventsRouter()
 events_router.initialize_services()
 app.include_router(events_router.get_router(), prefix="/api/v1")
+
+# ExportRouter MUST mount before SessionsRouter: `/sessions/export` would
+# otherwise be swallowed by `/sessions/{session_id}`.
+export_router = ExportRouter()
+app.include_router(export_router.get_router(), prefix="/api/v1")
 
 sessions_router = SessionsRouter()
 app.include_router(sessions_router.get_router(), prefix="/api/v1")
