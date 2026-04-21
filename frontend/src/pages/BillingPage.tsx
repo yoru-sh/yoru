@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useSearchParams } from "react-router-dom"
 import { postCheckoutSession, type Plan } from "../lib/api"
 import { toast } from "../components/Toaster"
+import { ProTierBanner } from "../components/ProTierBanner"
 import { EmptyState } from "../components/ui/EmptyState"
 
 interface Org {
@@ -78,6 +79,12 @@ export function BillingPage() {
   return (
     // TODO: nest inside /settings tabs shell once US-21 lands.
     <div className="bg-paper text-ink">
+      {data?.plan && data.plan !== "free" && (
+        <div className="mb-6">
+          <ProTierBanner plan={data.plan} />
+        </div>
+      )}
+
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-ink">Billing</h1>
         <p className="mt-1 text-sm text-ink-muted">
