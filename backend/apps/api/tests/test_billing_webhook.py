@@ -191,6 +191,71 @@ async def test_webhook_unknown_event_type_is_noop(
     assert org_count == 0, f"unknown event type mutated org table (got {org_count} rows)"
 
 
+async def test_subscription_created_upgrades_existing_org(
+    app, db_session, secret_env
+) -> None:
+    db_session.add(Org(id="org-1", plan="free"))
+    db_session.commit()
+
+    payload = {
+        "id": "evt_sub_created_1",
+        "type": "subscription.created",
+        "data": {"client_reference_id": "org-1", "plan": "team"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {"X-Polar-Signature": _sign(body), "Content-Type": "application/json"}
+
+    resp = await _post(app, body, headers)
+    assert resp.status_code == 200, resp.text
+
+    db_session.expire_all()
+    org = db_session.get(Org, "org-1")
+    assert org is not None
+    assert org.plan == "team"
+
+    evt = db_session.get(BillingEvent, "evt_sub_created_1")
+    assert evt is not None
+    assert evt.event_type == "subscription.created"
+    assert evt.org_id == "org-1"
+
+
+async def test_subscription_created_upserts_unknown_org(
+    app, db_session, secret_env
+) -> None:
+    payload = {
+        "id": "evt_sub_created_2",
+        "type": "subscription.created",
+        "data": {"client_reference_id": "org-unseen", "plan": "org"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {"X-Polar-Signature": _sign(body), "Content-Type": "application/json"}
+
+    resp = await _post(app, body, headers)
+    assert resp.status_code == 200, resp.text
+
+    org = db_session.get(Org, "org-unseen")
+    assert org is not None, "unknown org should be upserted"
+    assert org.plan == "org"
+
+
+async def test_subscription_created_invalid_plan_400(
+    app, db_session, secret_env
+) -> None:
+    payload = {
+        "id": "evt_sub_created_3",
+        "type": "subscription.created",
+        "data": {"client_reference_id": "org-3", "plan": "pro"},
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = {"X-Polar-Signature": _sign(body), "Content-Type": "application/json"}
+
+    resp = await _post(app, body, headers)
+    assert resp.status_code == 400, resp.text
+
+    assert db_session.get(BillingEvent, "evt_sub_created_3") is None
+    assert db_session.get(Org, "org-3") is None
+
+
 async def test_webhook_503_when_secret_unset(app, db_session, monkeypatch) -> None:
     monkeypatch.delenv("POLAR_WEBHOOK_SECRET", raising=False)
     payload = {"id": "evt_x", "type": "checkout.completed", "data": {}}

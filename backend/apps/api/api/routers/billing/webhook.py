@@ -38,6 +38,7 @@ _SIGNATURE_HEADER = "x-polar-signature"  # Starlette lowercases header keys
 _VALID_PLANS = {"team", "org"}
 _HANDLED_TYPES = {
     "checkout.completed",
+    "subscription.created",
     "subscription.updated",
     "subscription.cancelled",
 }
@@ -142,6 +143,28 @@ class WebhookRouter:
             else:
                 org.plan = plan
                 db.add(org)
+            return org_id
+
+        if event_type == "subscription.created":
+            org_id = data.get("client_reference_id")
+            plan = data.get("plan")
+            if not isinstance(org_id, str) or not org_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="subscription.created missing client_reference_id.",
+                )
+            if plan not in _VALID_PLANS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"subscription.created has invalid plan (got {plan!r}).",
+                )
+            org = db.get(Org, org_id)
+            if org is None:
+                db.add(Org(id=org_id, plan=plan))
+            else:
+                org.plan = plan
+                db.add(org)
+            _logger.info("billing.tier_upgraded org=%s plan=%s", org_id, plan)
             return org_id
 
         if event_type == "subscription.updated":
