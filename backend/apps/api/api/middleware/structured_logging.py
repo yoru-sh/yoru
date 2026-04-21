@@ -114,7 +114,14 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        request_id = getattr(request.state, "request_id", None) or uuid4().hex
+        # Inbound X-Request-ID wins — preserves upstream tracing chains. State
+        # still wins over the header when a dedicated correlation middleware
+        # (wave-40 C2 future) lands in front and sets it.
+        request_id = (
+            getattr(request.state, "request_id", None)
+            or request.headers.get("X-Request-ID")
+            or uuid4().hex
+        )
         request.state.request_id = request_id
         start = time.perf_counter()
         status = 500
