@@ -38,10 +38,14 @@ from apps.api.api.routers.receipt.health_deep_router import HealthDeepRouter
 from apps.api.api.routers.receipt.sessions_router import SessionsRouter
 from apps.api.api.routers.receipt.summary_router import SummaryRouter
 from apps.api.api.routers.webhooks import WebhooksRouter
-from apps.api.core.logging import configure_logging
+from apps.api.core.logging import configure_logging, get_logger
 from apps.api.core.max_body_size import MaxBodySizeMiddleware
+from apps.api.core.sentry import init_sentry
 
 configure_logging()
+
+_logger = get_logger(__name__)
+_logger.info("sentry_initialized", extra={"initialized": init_sentry()})
 
 
 @asynccontextmanager

@@ -35,6 +35,7 @@ pip-wheel-metadata/
 .env
 .env.*
 !.env.example
+!.env.template
 
 # Editors / OS
 .DS_Store
