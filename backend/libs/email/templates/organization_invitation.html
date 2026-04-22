@@ -1,37 +1,66 @@
 {% extends "base.html" %}
-
 {% block title %}Join {{ org_name }} on {{ brand_name }}{% endblock %}
+{% block preheader %}{{ inviter_name }} added you to {{ org_name }} as {{ role }}.{% endblock %}
+{% block rubric %}§ team invite{% endblock %}
 
 {% block content %}
-<h2>You've been invited to join {{ org_name }}</h2>
+<h1 style="margin:0 0 16px 0;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:24px;line-height:1.25;font-weight:600;color:#1f1a14;">
+  Join {{ org_name }} on {{ brand_name }}.
+</h1>
 
-<p>Hi there,</p>
-
-<p>
-    <strong>{{ inviter_name }}</strong> has invited you to join
-    <strong>{{ org_name }}</strong> on {{ brand_name }}
-    {% if role %}
-    as a <strong>{{ role }}</strong>
-    {% endif %}.
+<p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#1f1a14;">
+  <strong>{{ inviter_name }}</strong> added you to <strong>{{ org_name }}</strong>.
+  You'll see every Claude Code session the team runs — timeline, red flags, cost per
+  session, A–F score, JSON trail export. Same dashboard, shared workspace.
 </p>
 
-<div class="info-box">
-    <p><strong>Organization:</strong> {{ org_name }}</p>
-    {% if role %}
-    <p><strong>Your role:</strong> {{ role }}</p>
-    {% endif %}
-</div>
+<!-- role card -->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;border:1px solid #d4c8b2;background:#faf7f2;">
+  <tr>
+    <td style="padding:12px 16px;border-bottom:1px dashed #d4c8b2;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+          <td style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">workspace</td>
+          <td align="right" style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;">{{ org_name }}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:12px 16px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+          <td style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">role</td>
+          <td align="right" style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;text-transform:uppercase;">{{ role }}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
 
-<p>Click the button below to accept the invitation:</p>
+<!-- primary CTA -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:8px 0 24px 0;">
+  <tr>
+    <td style="background:#1f1a14;">
+      <a href="{{ invite_url }}"
+         style="display:inline-block;padding:12px 24px;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#faf7f2;text-decoration:none;">
+        Accept & join {{ org_name }} →
+      </a>
+    </td>
+  </tr>
+</table>
 
-<a href="{{ invite_url }}" class="button">Accept Invitation</a>
-
-<p style="font-size: 14px; color: #6b7280;">
-    Or copy and paste this link into your browser:<br>
-    <a href="{{ invite_url }}" style="color: #4F46E5;">{{ invite_url }}</a>
+<p style="margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#5c5242;">
+  Button not working? Paste this link into your browser:
+</p>
+<p style="margin:0 0 24px 0;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;word-break:break-all;">
+  <a href="{{ invite_url }}" style="color:#b45309;text-decoration:none;">{{ invite_url }}</a>
 </p>
 
-<p>If you don't have an account yet, you'll be able to create one when you accept the invitation.</p>
+<hr style="border:none;border-top:1px dashed #d4c8b2;margin:24px 0;">
 
-<p>Looking forward to having you on the team!</p>
+<p style="margin:0;font-size:13px;line-height:1.5;color:#5c5242;">
+  Didn't expect this invite? Ignore the email — {{ inviter_name }} isn't notified
+  and nothing gets created on your side.
+</p>
 {% endblock %}

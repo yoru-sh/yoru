@@ -1,41 +1,60 @@
 {% extends "base.html" %}
-
 {% block title %}You've been invited to {{ brand_name }}{% endblock %}
+{% block preheader %}{{ inviter_name }} invited you to {{ brand_name }} — expires {{ expires_at }}.{% endblock %}
+{% block rubric %}§ invitation{% endblock %}
 
 {% block content %}
-<h2>You've been invited!</h2>
+<h1 style="margin:0 0 16px 0;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:24px;line-height:1.25;font-weight:600;color:#1f1a14;">
+  {{ inviter_name }} invited you to {{ brand_name }}.
+</h1>
 
-<p>Hi there,</p>
-
-<p>
-    <strong>{{ inviter_name }}</strong>
-    {% if inviter_email %}
-    ({{ inviter_email }})
-    {% endif %}
-    has invited you to join <strong>{{ brand_name }}</strong>.
+<p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#1f1a14;">
+  Receipt captures every tool call, prompt, and assistant response from Claude Code
+  sessions — timeline, red flags, cost per session, A–F score, JSON trail export.
+  {{ inviter_name }} pulled you in to share the view.
 </p>
 
 {% if message %}
-<div class="info-box">
-    <p><strong>Personal message:</strong></p>
-    <p>{{ message }}</p>
-</div>
+<!-- personal message -->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:16px 0 24px 0;border-left:3px solid #b45309;background:#faf7f2;">
+  <tr>
+    <td style="padding:12px 16px;">
+      <p style="margin:0 0 4px 0;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">
+        from {{ inviter_name }}{% if inviter_email %} · {{ inviter_email }}{% endif %}
+      </p>
+      <p style="margin:0;font-size:14px;line-height:1.6;color:#1f1a14;font-style:italic;">
+        "{{ message }}"
+      </p>
+    </td>
+  </tr>
+</table>
 {% endif %}
 
-<p>Click the button below to accept the invitation and create your account:</p>
+<!-- primary CTA -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:8px 0 24px 0;">
+  <tr>
+    <td style="background:#1f1a14;">
+      <a href="{{ invite_url }}"
+         style="display:inline-block;padding:12px 24px;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#faf7f2;text-decoration:none;">
+        Accept invitation →
+      </a>
+    </td>
+  </tr>
+</table>
 
-<a href="{{ invite_url }}" class="button">Accept Invitation</a>
-
-<p style="font-size: 14px; color: #6b7280;">
-    Or copy and paste this link into your browser:<br>
-    <a href="{{ invite_url }}" style="color: #4F46E5;">{{ invite_url }}</a>
+<p style="margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#5c5242;">
+  Button not working? Paste this link into your browser:
+</p>
+<p style="margin:0 0 24px 0;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:12px;line-height:1.5;word-break:break-all;">
+  <a href="{{ invite_url }}" style="color:#b45309;text-decoration:none;">{{ invite_url }}</a>
 </p>
 
-{% if expires_at %}
-<div class="info-box">
-    <p><strong>Note:</strong> This invitation expires on {{ expires_at }}.</p>
-</div>
-{% endif %}
+<hr style="border:none;border-top:1px dashed #d4c8b2;margin:24px 0;">
 
-<p>We're excited to have you join us!</p>
+<p style="margin:0;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">
+  expires
+</p>
+<p style="margin:4px 0 0 0;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;">
+  {{ expires_at }}
+</p>
 {% endblock %}

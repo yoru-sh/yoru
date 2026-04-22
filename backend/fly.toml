@@ -10,7 +10,7 @@ primary_region = "cdg"  # Paris — closest to Loic (Switzerland)
   # SQLite lives on the mounted volume. Every write persists across restarts.
   RECEIPT_DB_URL = "sqlite:////data/receipt.db"
   # Override at deploy if the marketing / dashboard land on different origins.
-  CORS_ALLOWED_ORIGINS = "https://app.receipt.dev,https://receipt.dev"
+  CORS_ALLOWED_ORIGINS = "https://app.yoru.sh,https://yoru.sh"
 
 # Single Fly volume mounted at /data — the *only* persistent path. Anything
 # outside this directory is wiped on each deploy.

@@ -1,39 +1,59 @@
 {% extends "base.html" %}
-
-{% block title %}Welcome to {{ brand_name }}!{% endblock %}
+{% block title %}Welcome to {{ brand_name }}{% endblock %}
+{% block preheader %}Install the CLI, see your first Receipt in 60 seconds.{% endblock %}
+{% block rubric %}§ welcome{% endblock %}
 
 {% block content %}
-<h2>Welcome to {{ brand_name }}!</h2>
+<h1 style="margin:0 0 16px 0;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:24px;line-height:1.25;font-weight:600;color:#1f1a14;">
+  Welcome, {{ user_name }}.
+</h1>
 
-<p>Hi {{ user_name }},</p>
-
-<p>
-    Thank you for signing up! Your account has been successfully created with the email address
-    <strong>{{ user_email }}</strong>.
+<p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#1f1a14;">
+  Your {{ brand_name }} account is live. One install — 60 seconds — and every tool call,
+  prompt, and assistant response from your Claude Code sessions lands in your dashboard
+  with red flags, cost per session, and an A–F score.
 </p>
 
-<p>You can now access all the features and start using {{ brand_name }}:</p>
+<!-- CLI install card -->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;border:1px solid #d4c8b2;background:#faf7f2;">
+  <tr>
+    <td style="padding:8px 16px;border-bottom:1px dashed #d4c8b2;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">
+      install
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:16px;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;line-height:1.6;color:#1f1a14;">
+      <span style="color:#8c806c;">$</span> pip install receipt-cli<br>
+      <span style="color:#8c806c;">$</span> receipt init
+    </td>
+  </tr>
+</table>
 
-<a href="{{ dashboard_url }}" class="button">Go to Dashboard</a>
-
-<div class="info-box">
-    <p><strong>Getting Started Tips:</strong></p>
-    <ul style="margin: 8px 0; padding-left: 20px;">
-        <li>Complete your profile to personalize your experience</li>
-        <li>Invite team members to collaborate</li>
-        <li>Explore our features and tools</li>
-    </ul>
-</div>
-
-<p>
-    If you have any questions or need assistance, don't hesitate to reach out to our support team at
-    <a href="mailto:{{ support_email }}" style="color: #4F46E5;">{{ support_email }}</a>.
+<p style="margin:0 0 24px 0;font-size:15px;line-height:1.6;color:#1f1a14;">
+  <code style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;background:#f2ece0;padding:2px 6px;border:1px solid #d4c8b2;">receipt init</code>
+  opens a browser, you approve the device, your shell is paired. Run Claude Code anywhere
+  after that — Receipt routes each session to the right workspace by matching the git remote.
+  Passive. No config. No blocking.
 </p>
 
-<p>We're thrilled to have you with us!</p>
+<!-- primary CTA -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:8px 0 24px 0;">
+  <tr>
+    <td style="background:#1f1a14;">
+      <a href="{{ dashboard_url }}"
+         style="display:inline-block;padding:12px 24px;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#faf7f2;text-decoration:none;">
+        Open the dashboard →
+      </a>
+    </td>
+  </tr>
+</table>
 
-<p>
-    Best regards,<br>
-    The {{ brand_name }} Team
+<hr style="border:none;border-top:1px dashed #d4c8b2;margin:24px 0;">
+
+<p style="margin:0;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">
+  account
+</p>
+<p style="margin:4px 0 0 0;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;">
+  {{ user_email }}
 </p>
 {% endblock %}

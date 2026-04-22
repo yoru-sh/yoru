@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}{{ brand_name }} — {{ plan_name }} plan active{% endblock %}
+{% block preheader %}{{ plan_name }} plan — next billing {{ next_billing_date }}.{% endblock %}
+{% block rubric %}§ billing receipt{% endblock %}
+
+{% block content %}
+{# `action` is one of: upgraded | downgraded | renewed | cancelled #}
+<h1 style="margin:0 0 16px 0;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:24px;line-height:1.25;font-weight:600;color:#1f1a14;">
+  {% if action == "upgraded" %}You're on {{ plan_name }} now.
+  {% elif action == "downgraded" %}Plan changed to {{ plan_name }}.
+  {% elif action == "cancelled" %}Subscription cancelled.
+  {% else %}{{ plan_name }} plan renewed.
+  {% endif %}
+</h1>
+
+<p style="margin:0 0 20px 0;font-size:15px;line-height:1.6;color:#1f1a14;">
+  {% if action == "cancelled" %}
+    Your {{ previous_plan_name }} subscription ends <strong>{{ period_end_date }}</strong>.
+    Every feature stays on until that date — after it, the account rolls back to Free.
+    Session history stays intact.
+  {% elif action == "downgraded" %}
+    Plan switched from {{ previous_plan_name }} to {{ plan_name }}. The next invoice on
+    {{ next_billing_date }} bills the new rate — unused days of {{ previous_plan_name }}
+    are prorated back.
+  {% elif action == "upgraded" %}
+    {{ plan_name }} is live in your dashboard, {{ user_name }}. Prorated charge for the
+    current period is already on the card.
+  {% else %}
+    {{ plan_name }} renewed for another {{ cycle }}. Nothing to do.
+  {% endif %}
+</p>
+
+<!-- billing receipt card -->
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin:24px 0;border:1px solid #d4c8b2;background:#faf7f2;">
+  <tr>
+    <td style="padding:10px 16px;border-bottom:1px solid #d4c8b2;font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">
+      receipt
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:14px 16px;border-bottom:1px dashed #d4c8b2;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+          <td style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">plan</td>
+          <td align="right" style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;">{{ plan_name }}{% if cycle %} · {{ cycle }}{% endif %}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  {% if amount %}
+  <tr>
+    <td style="padding:14px 16px;border-bottom:1px dashed #d4c8b2;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+          <td style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">amount</td>
+          <td align="right" style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;">{{ amount }}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  {% endif %}
+  {% if seats %}
+  <tr>
+    <td style="padding:14px 16px;border-bottom:1px dashed #d4c8b2;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+          <td style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">seats</td>
+          <td align="right" style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;">{{ seats }}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+  {% endif %}
+  <tr>
+    <td style="padding:14px 16px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+        <tr>
+          <td style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:#8c806c;">
+            {% if action == "cancelled" %}access ends{% else %}next billing{% endif %}
+          </td>
+          <td align="right" style="font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace;font-size:13px;color:#1f1a14;">
+            {% if action == "cancelled" %}{{ period_end_date }}{% else %}{{ next_billing_date }}{% endif %}
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+
+<!-- primary CTA -->
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:8px 0 24px 0;">
+  <tr>
+    <td style="background:#1f1a14;">
+      <a href="{{ manage_url }}"
+         style="display:inline-block;padding:12px 24px;font-family:Inter,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;font-size:13px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;color:#faf7f2;text-decoration:none;">
+        {% if action == "cancelled" %}Re-subscribe →{% else %}Manage subscription →{% endif %}
+      </a>
+    </td>
+  </tr>
+</table>
+
+<hr style="border:none;border-top:1px dashed #d4c8b2;margin:24px 0;">
+
+<p style="margin:0;font-size:13px;line-height:1.5;color:#5c5242;">
+  Invoice PDF, VAT number, new card, seat count — all of it lives in the Stripe portal
+  behind the button above.
+</p>
+{% endblock %}
