@@ -75,10 +75,13 @@ export function PairCliPage() {
   return (
     <div className="flex min-h-dvh items-center justify-center bg-paper px-4 py-10">
       <div className="w-full max-w-sm rounded border border-rule bg-surface p-6 shadow-sm">
-        <div className="flex items-baseline justify-between">
-          <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink">
-            yoru
-          </h1>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <img src="/yoru-mark.png" alt="" aria-hidden="true" className="h-7 w-7" />
+            <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink">
+              yoru
+            </h1>
+          </div>
           <span className="font-mono text-micro uppercase tracking-wider text-ink-faint">
             § pair a device
           </span>

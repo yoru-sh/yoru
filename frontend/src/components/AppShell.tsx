@@ -99,9 +99,10 @@ export function AppShell() {
           <div className="flex items-center gap-6">
             <Link
               to="/"
-              className="rounded-sm font-mono text-sm font-semibold tracking-tight text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+              className="inline-flex items-center gap-2 rounded-sm font-mono text-sm font-semibold tracking-tight text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
             >
-              <span aria-hidden="true">◆</span> yoru
+              <img src="/yoru-mark.png" alt="" aria-hidden="true" className="h-5 w-5" />
+              yoru
             </Link>
             <nav aria-label="Primary" className="hidden items-center gap-5 md:flex">
               {NAV.map((item) => (

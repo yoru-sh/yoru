@@ -60,7 +60,10 @@ export function SignUpPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-paper px-4 py-10">
       <div className="w-full max-w-sm rounded border border-rule bg-surface p-6 shadow-sm">
-        <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink">yoru</h1>
+        <div className="flex items-center gap-3">
+          <img src="/yoru-mark.png" alt="" aria-hidden="true" className="h-8 w-8" />
+          <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink">yoru</h1>
+        </div>
         <p className="mt-2 font-mono text-micro uppercase tracking-wider text-ink-faint">
           Create your account
         </p>
