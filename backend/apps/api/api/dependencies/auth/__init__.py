@@ -1,4 +1,19 @@
-"""Authentication dependencies."""
+"""Authentication dependencies.
+
+Two auth vectors live side-by-side:
+
+1. **Bearer JWT** — `get_current_user_id`, legacy CLI hook-token ingest path.
+   Validates `Authorization: Bearer <token>` against Supabase. Kept for the CLI
+   because CLI tools don't speak cookies.
+
+2. **HttpOnly session cookie** — `get_current_user_id_from_cookie`, the only
+   vector for dashboard users. The access-token JWT lives in the `rcpt_session`
+   cookie set by `/auth/signin`; JS can never read it. CSRF protection lives in
+   the `CsrfMiddleware` (double-submit cookie pattern).
+
+The dashboard MUST use the cookie vector so that a compromised JS dependency
+can't exfiltrate the token via `localStorage` or `document.cookie`.
+"""
 
 from uuid import UUID
 
@@ -9,83 +24,122 @@ from libs.supabase.supabase import SupabaseManager
 
 security = HTTPBearer()
 
+SESSION_COOKIE_NAME = "rcpt_session"
+
 
 async def get_current_user_id(
     request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> UUID:
     """
-    FastAPI dependency that validates the Bearer token and returns the user ID.
+    Central auth dependency — accepts EITHER `rcpt_session` cookie (dashboard)
+    or `Authorization: Bearer <jwt>` header (CLI / server-to-server). Returns
+    the user UUID. 401 if neither path validates.
 
-    Extracts the JWT token from the Authorization header, validates it
-    with Supabase Auth, and returns the user's UUID.
-
-    Args:
-        request: The FastAPI request object
-        credentials: The HTTP Bearer credentials
-
-    Returns:
-        UUID of the authenticated user
-
-    Raises:
-        HTTPException: 401 if authentication fails
+    Dashboard path: cookie set at `/auth/signin`, JWT unreadable by JavaScript.
+    CLI path: callers explicitly attach the bearer header; CSRF is irrelevant
+    because browsers never auto-attach header tokens cross-origin.
     """
-    if not credentials:
+    # Cookie path first — dashboard requests always carry the session cookie.
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        # Fallback to Authorization header for CLI / headless clients.
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+
+    if not token:
         raise HTTPException(
             status_code=401,
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = credentials.credentials
     supabase = SupabaseManager()
-
     try:
-        # Validate token with Supabase Auth
         user_response = supabase.client.auth.get_user(token)
-
         if not user_response or not user_response.user:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid token",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
+            raise HTTPException(status_code=401, detail="Invalid token")
         return UUID(user_response.user.id)
-
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-async def get_current_user_token(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> str:
+async def get_current_user_token(request: Request) -> str:
     """
-    FastAPI dependency that returns the JWT token from the Authorization header.
-
-    Args:
-        credentials: The HTTP Bearer credentials
-
-    Returns:
-        The JWT token string
-
-    Raises:
-        HTTPException: 401 if authentication required
+    Return the raw JWT token for RLS-scoped Supabase calls — reads from
+    cookie (dashboard) or Authorization header (CLI).
     """
-    if not credentials:
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1].strip()
+    if not token:
         raise HTTPException(
             status_code=401,
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    return token
 
-    return credentials.credentials
+
+async def get_current_user_id_from_cookie(request: Request) -> UUID:
+    """Validate the `rcpt_session` cookie and return the user UUID.
+
+    This is the dashboard auth vector. The access-token JWT is read from a
+    secure HttpOnly cookie — never from a header — so it is inaccessible to
+    JavaScript. CSRF is handled separately by `CsrfMiddleware`.
+
+    Raises:
+        HTTPException: 401 if the cookie is missing, the token is invalid,
+        or Supabase rejects it.
+    """
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    supabase = SupabaseManager()
+    try:
+        user_response = supabase.client.auth.get_user(token)
+        if not user_response or not user_response.user:
+            raise HTTPException(status_code=401, detail="Invalid session")
+        return UUID(user_response.user.id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+
+async def get_current_user_id_or_cookie(
+    request: Request,
+) -> UUID:
+    """Accept EITHER the dashboard cookie OR a CLI bearer token.
+
+    Use this on endpoints that serve both surfaces (e.g. health-deep, admin
+    probes). For pure-dashboard endpoints prefer `get_current_user_id_from_cookie`
+    so CSRF stays enforced.
+    """
+    # Prefer cookie when present (dashboard path, CSRF-checked by middleware).
+    if SESSION_COOKIE_NAME in request.cookies:
+        return await get_current_user_id_from_cookie(request)
+
+    # Fall back to bearer for CLI callers.
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    token = auth_header.split(" ", 1)[1].strip()
+    supabase = SupabaseManager()
+    try:
+        user_response = supabase.client.auth.get_user(token)
+        if not user_response or not user_response.user:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return UUID(user_response.user.id)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 async def get_correlation_id(request: Request) -> str:

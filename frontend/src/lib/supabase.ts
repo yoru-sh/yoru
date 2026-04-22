@@ -1,16 +1,8 @@
-import { createClient } from "@supabase/supabase-js"
-
-const url = import.meta.env.VITE_SUPABASE_URL
-const anon = import.meta.env.VITE_SUPABASE_ANON_KEY
-
-if (!url || !anon) {
-  console.warn("[supabase] VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY missing; auth calls will fail.")
-}
-
-export const supabase = createClient(url ?? "", anon ?? "", {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-})
+// Deprecated. Dashboard auth is cookie-based via lib/auth-api.ts — the
+// Supabase JS client is no longer used on the frontend. Kept as an empty
+// module to avoid breaking any lingering import during the migration.
+//
+// Remove `@supabase/supabase-js` from package.json once all usages are
+// verified gone (grep `supabase` in src/ should return only this file +
+// docs).
+export {}

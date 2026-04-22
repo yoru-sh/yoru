@@ -21,8 +21,12 @@ class TemplateManager:
     _instance: "TemplateManager | None" = None
     _initialized: bool = False
 
-    def __new__(cls) -> "TemplateManager":
-        """Ensure singleton instance."""
+    def __new__(cls, *args, **kwargs) -> "TemplateManager":
+        """Ensure singleton instance.
+
+        Accepts and ignores any positional/keyword args so callers can pass
+        them through — `__init__` handles them on first construction.
+        """
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance

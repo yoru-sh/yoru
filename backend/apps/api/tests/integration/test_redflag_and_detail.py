@@ -130,4 +130,5 @@ async def test_session_detail_events_chronological(authed_client):
 
     assert row["tools_count"] == 3, row
     assert row["files_count"] == 2, row
-    assert sorted(row["files_changed"]) == ["src/a.py", "src/b.py"], row
+    # files_changed shape is now [{path, op, additions, deletions}] (v1 enrichment).
+    assert sorted(f["path"] for f in row["files_changed"]) == ["src/a.py", "src/b.py"], row

@@ -213,20 +213,32 @@ class AuthService:
             if not auth_response.user or not auth_response.session:
                 raise AuthenticationError("Invalid credentials", correlation_id)
 
-            # Get profile data
-            profile = self.supabase.get_record(
-                "profiles",
-                auth_response.user.id,
-                correlation_id=correlation_id,
-            )
+            # Profile is optional — the `public.profiles` table is part of the
+            # dormant SaaSForge org/user schemas (Phase 1). Signin must not
+            # depend on it: auth success is independent of metadata presence.
+            profile: dict | None = None
+            try:
+                profile = self.supabase.get_record(
+                    "profiles",
+                    auth_response.user.id,
+                    correlation_id=correlation_id,
+                )
+            except Exception as profile_err:
+                self.logger.log_warning(
+                    "profiles table unavailable; continuing without metadata",
+                    {**context, "error": str(profile_err)},
+                )
 
-            # Update last_login_at
-            self.supabase.update_record(
-                "profiles",
-                auth_response.user.id,
-                {"last_login_at": datetime.now().isoformat()},
-                correlation_id=correlation_id,
-            )
+            # last_login_at update — same fail-safe posture.
+            try:
+                self.supabase.update_record(
+                    "profiles",
+                    auth_response.user.id,
+                    {"last_login_at": datetime.now().isoformat()},
+                    correlation_id=correlation_id,
+                )
+            except Exception:
+                pass
 
             self.logger.log_info("User signin completed", context)
 
@@ -318,12 +330,21 @@ class AuthService:
             if not auth_response.user or not auth_response.session:
                 raise AuthenticationError("Token refresh failed", correlation_id)
 
-            # Get profile data
-            profile = self.supabase.get_record(
-                "profiles",
-                auth_response.user.id,
-                correlation_id=correlation_id,
-            )
+            # Profile is optional — same rationale as sign_in. Refresh must
+            # succeed even when the `public.profiles` table doesn't exist yet
+            # (pre-Phase-1 state).
+            profile: dict | None = None
+            try:
+                profile = self.supabase.get_record(
+                    "profiles",
+                    auth_response.user.id,
+                    correlation_id=correlation_id,
+                )
+            except Exception as profile_err:
+                self.logger.log_warning(
+                    "profiles table unavailable on refresh; continuing",
+                    {**context, "error": str(profile_err)},
+                )
 
             self.logger.log_info("Token refresh completed", context)
 

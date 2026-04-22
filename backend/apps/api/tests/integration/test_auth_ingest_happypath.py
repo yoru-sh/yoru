@@ -79,5 +79,6 @@ async def test_ingest_real_claude_shape_no_kind_no_user(authed_client):
     row = detail.json()
     assert row["tools_count"] == 1
     assert row["files_count"] == 1
-    assert row["files_changed"] == ["src/foo.py"]
+    # files_changed now returns [{path, op, additions, deletions}] (v1 enrichment).
+    assert [f["path"] for f in row["files_changed"]] == ["src/foo.py"]
     assert row["user"] == user

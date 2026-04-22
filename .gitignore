@@ -60,3 +60,12 @@ vault/*.off
 
 # Agent worktrees
 .worktrees/
+
+# Skill / agent working files — not code
+.agents/
+
+# Stray SQLite at backend root (dev-time artifact, real DB lives at backend/data/)
+backend/receipt.db
+
+# Runtime caches populated by pricing warmup etc.
+backend/data/*.json

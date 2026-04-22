@@ -3,7 +3,7 @@ import { Navigate, useLocation } from "react-router-dom"
 import { useSession } from "./useSession"
 
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { session, loading } = useSession()
+  const { user, loading } = useSession()
   const location = useLocation()
 
   if (loading) {
@@ -14,7 +14,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
     )
   }
 
-  if (!session) {
+  if (!user) {
     return <Navigate to="/signin" replace state={{ from: location.pathname + location.search }} />
   }
 

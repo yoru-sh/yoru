@@ -97,6 +97,13 @@ class SupabaseManager:
         try:
             self.client: Client = create_client(self.url, self.key)
 
+            # Wire the user's JWT so PostgREST RLS sees `auth.uid()` as that
+            # user. `set_session(access, refresh)` requires BOTH args (gotrue
+            # client-library quirk — an empty refresh silently raises and the
+            # subsequent `.postgrest.auth()` call never runs, leaving us on
+            # the anon key and RLS checks fail). The one line we actually need
+            # for RLS is `postgrest.auth(token)`; the auth module's session
+            # state only matters for client-side gotrue calls we don't use.
             # If access_token is provided, set it on the client for authenticated requests
             if self.access_token:
                 self.client.auth.set_session(self.access_token, "")

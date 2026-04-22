@@ -1,47 +1,62 @@
-import { createContext, useEffect, useState, type ReactNode } from "react"
-import type { Session } from "@supabase/supabase-js"
-import { supabase } from "../lib/supabase"
+import { createContext, useCallback, useEffect, useState, type ReactNode } from "react"
+import { getMe, signout as apiSignout, type AuthUser } from "../lib/auth-api"
 
 interface AuthCtx {
-  session: Session | null
+  user: AuthUser | null
   loading: boolean
+  refresh: () => Promise<void>
   signOut: () => Promise<void>
 }
 
 export const AuthContext = createContext<AuthCtx>({
-  session: null,
+  user: null,
   loading: true,
+  refresh: async () => {},
   signOut: async () => {},
 })
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null)
+  const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
+
+  const refresh = useCallback(async () => {
+    const me = await getMe()
+    setUser(me)
+    setLoading(false)
+  }, [])
 
   useEffect(() => {
     let mounted = true
-
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return
-      setSession(data.session)
-      setLoading(false)
-    })
-
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      if (!mounted) return
-      setSession(s)
-      setLoading(false)
-    })
-
+    getMe()
+      .then((me) => {
+        if (!mounted) return
+        setUser(me)
+      })
+      .catch(() => {
+        if (!mounted) return
+        setUser(null)
+      })
+      .finally(() => {
+        if (!mounted) return
+        setLoading(false)
+      })
     return () => {
       mounted = false
-      sub.subscription.unsubscribe()
     }
   }, [])
 
-  const signOut = async () => {
-    await supabase.auth.signOut()
-  }
+  const signOut = useCallback(async () => {
+    try {
+      await apiSignout()
+    } catch {
+      // ignore — cookies will be cleared regardless once browser refreshes
+    }
+    setUser(null)
+  }, [])
 
-  return <AuthContext.Provider value={{ session, loading, signOut }}>{children}</AuthContext.Provider>
+  return (
+    <AuthContext.Provider value={{ user, loading, refresh, signOut }}>
+      {children}
+    </AuthContext.Provider>
+  )
 }
