@@ -54,10 +54,10 @@ export function SessionsTableEmpty() {
   return (
     <EmptyState
       heading="No sessions yet"
-      body="Run `receipt init` in your terminal."
+      body="Run `yoru init` in your terminal."
       action={
         <code className="rounded-sm bg-sunken px-2 py-1 font-mono text-caption text-ink">
-          receipt init
+          yoru init
         </code>
       }
     />

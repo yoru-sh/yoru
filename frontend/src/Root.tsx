@@ -22,6 +22,7 @@ import { WorkspacesPage } from "./pages/WorkspacesPage"
 import { SessionDetailPage } from "./pages/SessionDetailPage"
 import { SessionsListPage } from "./pages/SessionsListPage"
 import { SignInPage } from "./pages/SignInPage"
+import { SignUpPage } from "./pages/SignUpPage"
 import { SmokePage } from "./pages/SmokePage"
 import { WelcomePage } from "./pages/WelcomePage"
 import { queryClient } from "./lib/queryClient"
@@ -31,6 +32,7 @@ import { queryClient } from "./lib/queryClient"
 // "Hey developer" placeholder.
 const router = createBrowserRouter([
   { path: "/signin", element: <SignInPage />, errorElement: <ErrorPage /> },
+  { path: "/signup", element: <SignUpPage />, errorElement: <ErrorPage /> },
   { path: "/auth/callback", element: <AuthCallback />, errorElement: <ErrorPage /> },
   { path: "/docs/install", element: <DocsInstallPage />, errorElement: <ErrorPage /> },
   { path: "/__smoke", element: <SmokePage />, errorElement: <ErrorPage /> },

@@ -64,7 +64,7 @@ export function RoutingPage() {
         </p>
         <h1 className="mt-2 font-serif text-h2 text-ink">Routing</h1>
         <p className="mt-2 max-w-2xl text-sm text-ink-muted">
-          When the Receipt CLI streams events, the server picks which
+          When the Yoru CLI streams events, the server picks which
           workspace receives them based on these rules. Patterns are matched
           against the project's <code className="font-mono text-caption">git remote</code>{" "}
           URL or its working directory.

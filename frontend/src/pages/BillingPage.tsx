@@ -503,7 +503,7 @@ export function BillingPage() {
           Secured by Stripe · cancel anytime · seats pro-rated
         </p>
         <a
-          href={`${(import.meta.env.VITE_MARKETING_URL as string | undefined) ?? "https://receipt.dev"}/pricing`}
+          href={`${(import.meta.env.VITE_MARKETING_URL as string | undefined) ?? "https://yoru.sh"}/pricing`}
           target="_blank"
           rel="noopener noreferrer"
           className="font-mono text-caption text-ink-muted underline decoration-rule underline-offset-2 hover:text-ink"
@@ -611,7 +611,7 @@ function PlanCard({
           return (
             <div className="mt-4">
               <a
-                href="mailto:hello@opentruth.ch?subject=Receipt%20Org%20plan"
+                href="mailto:hello@opentruth.ch?subject=Yoru%20Org%20plan"
                 className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-sm border border-ink bg-ink px-3 py-2 font-mono text-caption font-semibold uppercase tracking-wider text-canvas hover:bg-ink-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
               >
                 Contact sales →
@@ -630,7 +630,7 @@ function PlanCard({
           return (
             <div className="mt-4">
               <a
-                href={`mailto:hello@opentruth.ch?subject=Receipt%20-%20switch%20from%20Org%20to%20${plan.name}`}
+                href={`mailto:hello@opentruth.ch?subject=Yoru%20-%20switch%20from%20Org%20to%20${plan.name}`}
                 className="inline-flex min-h-[40px] w-full items-center justify-center gap-2 rounded-sm border border-rule bg-surface px-3 py-2 font-mono text-caption uppercase tracking-wider text-ink hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
               >
                 Contact sales →

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { apiFetch } from "../lib/api"
 
 type State =
@@ -14,6 +14,34 @@ function formatCode(raw: string): string {
   return `${clean.slice(0, 4)}-${clean.slice(4, 8)}`
 }
 
+/** Card-wide input. Large mono, wide tracking — the code has to *look* like a
+ *  receipt stub, not a generic form field. */
+const INPUT_BASE =
+  "mt-2 w-full rounded border border-rule bg-paper px-4 py-4 text-center font-mono text-3xl " +
+  "tracking-[0.4em] text-ink outline-none " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 " +
+  "focus-visible:ring-offset-2 focus-visible:ring-offset-paper " +
+  "disabled:opacity-60 disabled:cursor-not-allowed " +
+  "placeholder:text-ink-faint placeholder:tracking-[0.4em]"
+
+const LABEL_CLASS = "block font-mono text-micro uppercase tracking-wider text-ink-faint"
+
+/** Inline spinner — only rendered during the submitting state. Sized to align
+ *  with the button label's cap height. */
+function Spinner() {
+  return (
+    <svg
+      className="h-3.5 w-3.5 motion-safe:animate-spin"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" />
+      <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function PairCliPage() {
   const [params] = useSearchParams()
   const initialCode = useMemo(() => formatCode(params.get("code") ?? ""), [params])
@@ -24,7 +52,9 @@ export function PairCliPage() {
     setCode(initialCode)
   }, [initialCode])
 
-  const canSubmit = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code) && state.kind !== "submitting"
+  const submitting = state.kind === "submitting"
+  const showFormatHint = code.length > 0 && !/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)
+  const canSubmit = /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code) && !submitting
 
   async function authorize(e: React.FormEvent) {
     e.preventDefault()
@@ -43,94 +73,136 @@ export function PairCliPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-xl px-6 py-16">
-      <header className="mb-8">
-        <p className="font-mono text-micro uppercase tracking-wider text-ink-muted">
-          Receipt CLI
-        </p>
-        <h1 className="mt-2 font-serif text-h2 text-ink">Pair a new device</h1>
-        <p className="mt-2 text-sm text-ink-muted">
-          You ran{" "}
-          <code className="rounded-sm bg-sunken px-1.5 py-0.5 font-mono text-caption">
-            receipt init
-          </code>{" "}
-          on a machine. Confirm the code it printed to pair that machine with your
-          account.
-        </p>
-      </header>
-
-      {state.kind === "success" ? (
-        <div
-          role="status"
-          className="rounded border border-flag-none/40 bg-flag-none/5 p-6"
-        >
-          <p className="font-mono text-micro uppercase tracking-wider text-flag-none">
-            Paired
-          </p>
-          <h2 className="mt-2 font-serif text-h3 text-ink">Device authorized</h2>
-          <p className="mt-3 text-sm text-ink">
-            Your CLI will finish setup in a few seconds. You can close this tab.
-          </p>
-          <p className="mt-2 text-caption text-ink-muted">
-            Code <code className="font-mono text-ink">{state.code}</code> has been
-            consumed and is no longer valid.
-          </p>
+    <div className="flex min-h-dvh items-center justify-center bg-paper px-4 py-10">
+      <div className="w-full max-w-sm rounded border border-rule bg-surface p-6 shadow-sm">
+        <div className="flex items-baseline justify-between">
+          <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink">
+            yoru
+          </h1>
+          <span className="font-mono text-micro uppercase tracking-wider text-ink-faint">
+            § pair a device
+          </span>
         </div>
-      ) : (
-        <form onSubmit={authorize} className="space-y-5">
-          <div>
-            <label
-              htmlFor="pair-code"
-              className="block font-mono text-micro uppercase tracking-wider text-ink-muted"
-            >
-              Pairing code
-            </label>
-            <input
-              id="pair-code"
-              autoFocus
-              autoComplete="one-time-code"
-              inputMode="text"
-              spellCheck={false}
-              value={code}
-              onChange={(e) => setCode(formatCode(e.target.value))}
-              placeholder="ABCD-EFGH"
-              maxLength={9}
-              className="mt-2 w-full rounded border border-rule bg-canvas px-4 py-3 text-center font-mono text-h3 tracking-[0.3em] text-ink outline-none focus:border-ink"
-              aria-describedby="pair-hint"
-            />
-            <p id="pair-hint" className="mt-2 text-caption text-ink-muted">
-              Match this exactly with the code printed by your terminal.
+
+        {state.kind === "success" ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mt-6 border-l-2 border-accent-500 bg-sunken px-4 py-4"
+          >
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className="font-mono text-base leading-none text-accent-500"
+              >
+                ✓
+              </span>
+              <p className="font-mono text-micro uppercase tracking-wider text-ink-muted">
+                device authorized
+              </p>
+            </div>
+            <p className="mt-2 text-sm text-ink">
+              Your CLI will finish setup in a few seconds. You can close this tab.
+            </p>
+            <p className="mt-3 font-mono text-micro text-ink-faint">
+              code{" "}
+              <code className="font-mono text-ink">{state.code}</code>{" "}
+              consumed — no longer valid
             </p>
           </div>
-
-          {state.kind === "error" && (
-            <p role="alert" className="text-sm text-flag-secret">
-              {state.message}
+        ) : (
+          <>
+            <p className="mt-5 text-sm leading-relaxed text-ink-muted">
+              You ran{" "}
+              <code className="rounded-sm border border-rule bg-paper px-1.5 py-0.5 font-mono text-caption text-ink">
+                yoru init
+              </code>{" "}
+              on a machine. Confirm the code your terminal printed, then authorize.
             </p>
-          )}
 
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className="w-full rounded border border-ink bg-ink py-3 font-mono text-sm uppercase tracking-wider text-canvas transition hover:bg-ink-muted disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {state.kind === "submitting" ? "Authorizing…" : "Authorize this device"}
-          </button>
+            <form onSubmit={authorize} className="mt-6 space-y-4" noValidate>
+              <div>
+                <label htmlFor="pair-code" className={LABEL_CLASS}>
+                  Pairing code
+                </label>
+                <input
+                  id="pair-code"
+                  autoFocus
+                  autoComplete="one-time-code"
+                  inputMode="text"
+                  spellCheck={false}
+                  value={code}
+                  disabled={submitting}
+                  onChange={(e) => setCode(formatCode(e.target.value))}
+                  placeholder="ABCD-EFGH"
+                  maxLength={9}
+                  className={INPUT_BASE}
+                  aria-describedby="pair-hint"
+                  aria-invalid={state.kind === "error" || showFormatHint ? "true" : undefined}
+                />
+                <p
+                  id="pair-hint"
+                  className={
+                    "mt-2 font-mono text-micro " +
+                    (showFormatHint ? "text-flag-env" : "text-ink-faint")
+                  }
+                >
+                  {showFormatHint
+                    ? "Format is 4 letters, dash, 4 letters (e.g. ABCD-EFGH)."
+                    : "Must match the code printed by your terminal, character for character."}
+                </p>
+              </div>
 
-          <p className="text-caption text-ink-muted">
-            Only authorize codes you generated yourself. A valid code grants the
-            machine permission to stream events to your account until you revoke
-            it from{" "}
-            <a
-              href="/settings/profile"
-              className="underline decoration-rule underline-offset-2 hover:text-ink"
-            >
-              Settings → Tokens
-            </a>
-            .
-          </p>
-        </form>
-      )}
+              <button
+                type="submit"
+                disabled={!canSubmit}
+                className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded bg-accent-500 px-3 py-2 text-sm font-medium text-primary-950 hover:bg-accent-400 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submitting && <Spinner />}
+                {submitting ? "Authorizing…" : "Authorize this device"}
+              </button>
+
+              {state.kind === "error" && (
+                <div
+                  role="alert"
+                  aria-live="polite"
+                  className="border-l-2 border-flag-env bg-flag-env/5 px-3 py-2 text-sm text-ink"
+                >
+                  <span className="font-mono text-ink-muted">[ERR]</span> {state.message}
+                  <p className="mt-1 font-mono text-micro text-ink-faint">
+                    Code may be expired. Re-run{" "}
+                    <code className="font-mono text-ink">yoru init</code> and try again.
+                  </p>
+                </div>
+              )}
+            </form>
+
+            <hr className="my-5 border-dashed border-rule" />
+
+            <div className="space-y-2">
+              <p
+                role="note"
+                className="border-l-2 border-flag-env/40 bg-flag-env/5 px-3 py-2 font-mono text-micro leading-relaxed text-ink"
+              >
+                <span className="font-mono text-ink-muted">[safety]</span>{" "}
+                If you didn&apos;t run{" "}
+                <code className="font-mono text-ink">yoru init</code>, close this tab —
+                your account stays safe.
+              </p>
+              <p className="font-mono text-micro leading-relaxed text-ink-faint">
+                Authorized machines stream events until you revoke them from{" "}
+                <Link
+                  to="/settings/tokens"
+                  className="text-accent-600 underline-offset-2 hover:text-accent-500 hover:underline"
+                >
+                  Settings → Tokens
+                </Link>
+                .
+              </p>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }

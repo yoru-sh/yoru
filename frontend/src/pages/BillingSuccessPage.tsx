@@ -72,7 +72,7 @@ export function BillingSuccessPage() {
     <div className="bg-paper text-ink">
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight text-ink">
-          You&apos;re subscribed to Receipt Team — thanks!
+          You&apos;re subscribed to Yoru Team — thanks!
         </h1>
         <p className="mt-1 text-sm text-ink-muted">
           Your plan refreshes within a few seconds. Receipts captured by your CLI

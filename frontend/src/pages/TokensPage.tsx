@@ -99,7 +99,7 @@ export function TokensPage() {
           CLI tokens
         </h1>
         <p className="mt-2 text-sm text-ink-muted">
-          Authenticate the Receipt CLI from your machines, CI runners, or
+          Authenticate the Yoru CLI from your machines, CI runners, or
           servers. Personal tokens are per-human; service tokens survive team
           changes.
         </p>
@@ -136,7 +136,7 @@ export function TokensPage() {
         ) : visibleMyTokens.length === 0 ? (
           <EmptyCard
             title="No personal tokens yet"
-            body="Run `receipt init` in your terminal to pair this machine."
+            body="Run `yoru init` in your terminal to pair this machine."
             cta={
               <Link
                 to="/docs/install"

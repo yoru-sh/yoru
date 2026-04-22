@@ -212,7 +212,7 @@ export function SmokePage() {
     <div className="min-h-screen bg-paper text-ink">
       <div className="mx-auto max-w-3xl p-6 font-mono">
         <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-lg uppercase tracking-wider text-ink-muted">Receipt smoke · /__smoke</h1>
+          <h1 className="text-lg uppercase tracking-wider text-ink-muted">Yoru smoke · /__smoke</h1>
           <button
             onClick={() => void run()}
             disabled={running}

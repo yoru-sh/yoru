@@ -3,7 +3,7 @@ export interface EmptySessionsStateProps {
 }
 
 export function EmptySessionsState({
-  installCommand = "receipt init",
+  installCommand = "yoru init",
 }: EmptySessionsStateProps) {
   return (
     <section

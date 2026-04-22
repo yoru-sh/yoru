@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react"
-import { Link, Navigate, useLocation, useSearchParams } from "react-router-dom"
-import { signin, AuthError } from "../lib/auth-api"
+import { Link, Navigate, useLocation } from "react-router-dom"
+import { signup, AuthError } from "../lib/auth-api"
 import { useSession } from "../auth/useSession"
 import { GithubOAuthButton } from "../auth/GithubOAuthButton"
 
@@ -13,40 +13,42 @@ const LABEL_CLASS = "font-mono text-micro uppercase tracking-wider text-ink-fain
 
 function friendlyError(err: unknown): string {
   if (err instanceof AuthError) {
-    if (err.status === 401) return "Invalid email or password."
+    if (err.status === 409) return "An account with this email already exists — sign in instead."
+    if (err.status === 400) return err.detail || "Check the form: something is missing or invalid."
     if (err.status === 429) return "Too many requests. Wait a minute, then try again."
-    return err.detail || `Sign-in failed (${err.status}).`
+    return err.detail || `Signup failed (${err.status}).`
   }
   return "Something went wrong. Please try again."
 }
 
-export function SignInPage() {
+export function SignUpPage() {
   const { user, loading, refresh } = useSession()
   const location = useLocation() as { state?: { from?: string } }
   const from = location.state?.from ?? null
-  const [searchParams] = useSearchParams()
-  const reason = searchParams.get("reason")
-  const tokenExpired = reason === "token-expired"
-  const oauthBanner = (() => {
-    if (reason === "oauth-failed") return "GitHub sign-in failed. Please try again or use your email."
-    if (reason === "oauth-refused") return "Sign-in cancelled on GitHub."
-    return null
-  })()
 
+  const [firstName, setFirstName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [err, setErr] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   if (loading) return null
-  if (user) return <Navigate to={from ?? "/"} replace />
+  if (user) return <Navigate to={from ?? "/welcome"} replace />
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setErr(null)
+    if (password.length < 8) {
+      setErr("Password must be at least 8 characters.")
+      return
+    }
     setSubmitting(true)
     try {
-      await signin(email, password)
+      await signup({
+        email,
+        password,
+        first_name: firstName || undefined,
+      })
       await refresh()
     } catch (error) {
       setErr(friendlyError(error))
@@ -56,39 +58,15 @@ export function SignInPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-paper px-4">
+    <div className="flex min-h-screen items-center justify-center bg-paper px-4 py-10">
       <div className="w-full max-w-sm rounded border border-rule bg-surface p-6 shadow-sm">
         <h1 className="font-mono text-2xl font-semibold tracking-tight text-ink">yoru</h1>
         <p className="mt-2 font-mono text-micro uppercase tracking-wider text-ink-faint">
-          Audit receipts · AI coding sessions
+          Create your account
         </p>
 
-        {tokenExpired && (
-          <div
-            role="status"
-            className="mt-5 border-l-2 border-accent-500 bg-sunken px-3 py-2 text-sm text-ink"
-          >
-            <span className="font-mono text-micro uppercase tracking-wider text-ink-muted">
-              Session expired
-            </span>
-            <p className="mt-0.5">Sign in again to continue.</p>
-          </div>
-        )}
-
-        {oauthBanner && (
-          <div
-            role="alert"
-            className="mt-5 border-l-2 border-flag-env bg-flag-env/5 px-3 py-2 text-sm text-ink"
-          >
-            <span className="font-mono text-micro uppercase tracking-wider text-ink-muted">
-              [oauth]
-            </span>
-            <p className="mt-0.5">{oauthBanner}</p>
-          </div>
-        )}
-
         <div className="mt-6">
-          <GithubOAuthButton />
+          <GithubOAuthButton label="Sign up with GitHub" />
         </div>
 
         <div className="my-5 flex items-center gap-3">
@@ -97,7 +75,18 @@ export function SignInPage() {
           <span className="h-px flex-1 bg-rule" aria-hidden="true" />
         </div>
 
-        <form onSubmit={onSubmit} className="space-y-3">
+        <form onSubmit={onSubmit} className="space-y-3" noValidate>
+          <label className="block">
+            <span className={LABEL_CLASS}>First name (optional)</span>
+            <input
+              type="text"
+              autoComplete="given-name"
+              value={firstName}
+              onChange={(e) => setFirstName(e.target.value)}
+              className={INPUT_CLASS}
+              placeholder="Loic"
+            />
+          </label>
           <label className="block">
             <span className={LABEL_CLASS}>Email</span>
             <input
@@ -116,11 +105,12 @@ export function SignInPage() {
             <input
               type="password"
               required
-              autoComplete="current-password"
+              minLength={8}
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className={INPUT_CLASS}
-              placeholder="••••••••"
+              placeholder="At least 8 characters"
             />
           </label>
           <button
@@ -128,7 +118,7 @@ export function SignInPage() {
             disabled={submitting}
             className="w-full rounded bg-accent-500 px-3 py-2 text-sm font-medium text-primary-950 hover:bg-accent-400 outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper disabled:opacity-50"
           >
-            {submitting ? "Signing in…" : "Sign in"}
+            {submitting ? "Creating account…" : "Create account"}
           </button>
           {err && (
             <div
@@ -143,12 +133,12 @@ export function SignInPage() {
         <hr className="my-5 border-dashed border-rule" />
 
         <p className="font-sans text-sm text-ink-muted">
-          No account yet?{" "}
+          Already have an account?{" "}
           <Link
-            to="/signup"
+            to="/signin"
             className="font-medium text-accent-600 hover:text-accent-500 underline-offset-2 hover:underline"
           >
-            Create one →
+            Sign in →
           </Link>
         </p>
       </div>

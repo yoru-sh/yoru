@@ -2,10 +2,10 @@ import { useState } from "react"
 import { toast } from "../components/Toaster"
 
 const STEPS: { label: string; code: string }[] = [
-  { label: "1. Install the CLI", code: "pip install receipt-cli" },
-  { label: "2. Initialize — opens browser to mint a hook token", code: "receipt init" },
+  { label: "1. Install the CLI", code: "pip install yoru-cli" },
+  { label: "2. Initialize — opens browser to mint a hook token", code: "yoru init" },
   {
-    label: "3. Run any Claude Code session — your first Receipt appears in seconds",
+    label: "3. Run any Claude Code session — your first receipt appears in seconds",
     code: "claude",
   },
 ]
@@ -52,7 +52,7 @@ export function DocsInstallPage() {
         <p className="font-mono text-micro uppercase tracking-wider text-ink-muted">
           § Install receipt
         </p>
-        <h1 className="text-2xl font-semibold tracking-tight text-ink">Install Receipt</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-ink">Install Yoru</h1>
         <p className="text-sm text-ink-muted">
           Three commands. About 60 seconds. Your first Receipt appears as soon as you run a Claude
           Code session.

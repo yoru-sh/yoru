@@ -30,7 +30,8 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr
 
 from apps.api.api.dependencies.auth import (
@@ -156,6 +157,8 @@ class CookieAuthRouter:
     def _setup_routes(self) -> None:
         self.router.post("/signup", status_code=201, summary="Register + set session cookies")(self.signup)
         self.router.post("/signin", status_code=200, summary="Sign in + set session cookies")(self.signin)
+        self.router.get("/github/start", status_code=302, summary="Begin GitHub OAuth handshake via Supabase")(self.github_start)
+        self.router.get("/github/callback", status_code=302, summary="Finish GitHub OAuth; set cookies; redirect to dashboard")(self.github_callback)
         self.router.post("/session/signout", status_code=204, summary="Clear session cookies")(self.signout)
         self.router.post("/session/refresh", status_code=200, summary="Rotate session via refresh cookie")(self.refresh)
         self.router.get("/session/me", status_code=200, summary="Lightweight session-aliveness check (full profile CRUD lives at /me)")(self.me)
@@ -208,6 +211,112 @@ class CookieAuthRouter:
             refresh=auth_response.refresh_token,
         )
         return SessionUserResponse(user=auth_response.user)
+
+    # ── GitHub OAuth (server-driven, zero Supabase JS on the frontend) ────
+    #
+    #   [button on /signin or /signup] → GET /auth/github/start
+    #     ↓ 302
+    #   github.com/login/oauth → supabase.io → 302 /auth/github/callback?code=…
+    #     ↓ backend exchanges code → mints cookies → 302 {APP_URL}/welcome
+    #
+    # PKCE caveat: supabase-py's default flow generates a code_verifier at
+    # /start time and stores it in an in-process memory storage. Each FastAPI
+    # request creates a fresh client → the verifier is gone at /callback. We
+    # work around this by extracting the verifier after sign_in_with_oauth and
+    # stashing it in an HttpOnly cookie, then re-seeding the fresh callback
+    # client's storage before calling exchange_code_for_session.
+    _OAUTH_VERIFIER_COOKIE = "rcpt_oauth_verifier"
+    _OAUTH_STATE_TTL = 600  # 10 min — long enough to fumble the GitHub approve screen
+
+    def _app_url(self) -> str:
+        return os.environ.get("APP_URL", "http://localhost:5173").rstrip("/")
+
+    def _api_base(self, request: Request) -> str:
+        """Public URL of our API, used as the OAuth callback target.
+
+        `API_URL` env wins for prod. Fallback to the request's own scheme+host
+        so local dev (uvicorn on :8002) works without setting env."""
+        explicit = os.environ.get("API_URL", "").rstrip("/")
+        if explicit:
+            return explicit
+        return f"{request.url.scheme}://{request.url.netloc}"
+
+    @staticmethod
+    def _verifier_key(supabase: SupabaseManager) -> str:
+        """Storage key the SDK uses for the PKCE verifier. Format matches
+        supabase_auth's convention: `{storage_key}-code-verifier`."""
+        return f"{supabase.client.auth._storage_key}-code-verifier"
+
+    async def github_start(self, request: Request) -> Response:
+        supabase = SupabaseManager()
+        callback_url = f"{self._api_base(request)}/api/v1/auth/github/callback"
+        try:
+            oauth = supabase.client.auth.sign_in_with_oauth({
+                "provider": "github",
+                "options": {"redirect_to": callback_url},
+            })
+            # Pull the PKCE verifier the SDK just generated. It lives in the
+            # in-process MemoryStorage — we need to persist it across the
+            # round-trip to GitHub so /callback can hand it back to the SDK.
+            verifier = supabase.client.auth._storage.get_item(self._verifier_key(supabase))
+            if not verifier:
+                raise RuntimeError("Supabase did not emit a PKCE verifier")
+        except Exception as e:
+            self.logger.log_error("github_start_failed", {"error": str(e)})
+            return RedirectResponse(f"{self._app_url()}/signin?reason=oauth-failed", status_code=302)
+
+        redirect = RedirectResponse(oauth.url, status_code=302)
+        redirect.set_cookie(
+            key=self._OAUTH_VERIFIER_COOKIE,
+            value=verifier,
+            max_age=self._OAUTH_STATE_TTL,
+            path="/api/v1/auth/github",
+            httponly=True,
+            secure=_cookie_secure(),
+            samesite="lax",
+        )
+        return redirect
+
+    async def github_callback(
+        self,
+        request: Request,
+        code: str | None = Query(default=None),
+        error: str | None = Query(default=None),
+        error_description: str | None = Query(default=None),
+    ) -> Response:
+        app = self._app_url()
+        # Provider-level refusal (user hit "Cancel" on GitHub, etc.)
+        if error or not code:
+            self.logger.log_warning(
+                "github_callback_refused",
+                {"error": error, "detail": error_description},
+            )
+            return RedirectResponse(f"{app}/signin?reason=oauth-refused", status_code=302)
+
+        verifier = request.cookies.get(self._OAUTH_VERIFIER_COOKIE)
+        if not verifier:
+            self.logger.log_warning("github_callback_missing_verifier", {})
+            return RedirectResponse(f"{app}/signin?reason=oauth-failed", status_code=302)
+
+        try:
+            supabase = SupabaseManager()
+            # Re-seed the fresh client's PKCE storage with the verifier we
+            # stashed at /start time; exchange_code_for_session reads it back
+            # from the same key.
+            supabase.client.auth._storage.set_item(self._verifier_key(supabase), verifier)
+            result = supabase.client.auth.exchange_code_for_session({"auth_code": code})
+            session = getattr(result, "session", None)
+            if session is None or not session.access_token or not session.refresh_token:
+                raise RuntimeError("Supabase exchange returned no session tokens")
+        except Exception as e:
+            self.logger.log_error("github_callback_exchange_failed", {"error": str(e)})
+            return RedirectResponse(f"{app}/signin?reason=oauth-failed", status_code=302)
+
+        redirect = RedirectResponse(f"{app}/welcome", status_code=302)
+        _set_session_cookies(redirect, access=session.access_token, refresh=session.refresh_token)
+        # Consumed — drop the verifier cookie so a replay can't re-use it.
+        redirect.delete_cookie(self._OAUTH_VERIFIER_COOKIE, path="/api/v1/auth/github")
+        return redirect
 
     async def signout(self, request: Request, response: Response) -> Response:
         """Clear cookies unconditionally — idempotent, no 401 if already out."""
