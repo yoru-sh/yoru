@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react"
 import { useSearchParams } from "react-router-dom"
+import { useQuery } from "@tanstack/react-query"
+import { listWorkspaces, type Workspace } from "../../lib/api"
 
 function updateParam(
   params: URLSearchParams,
@@ -29,6 +31,15 @@ export function FilterBar() {
   const toParam = params.get("to") ?? ""
   const flagOnly = params.get("flag") === "1"
   const minCostParam = params.get("min_cost") ?? ""
+  const workspaceParam = params.get("workspace_id") ?? ""
+
+  const workspacesQuery = useQuery<Workspace[]>({
+    queryKey: ["me", "workspaces"],
+    queryFn: listWorkspaces,
+    staleTime: 60_000,
+    meta: { silent: true },
+  })
+  const workspaces = workspacesQuery.data ?? []
 
   const [userDraft, setUserDraft] = useState(userParam)
   useEffect(() => setUserDraft(userParam), [userParam])
@@ -51,7 +62,7 @@ export function FilterBar() {
   const clearAll = () => setParams(new URLSearchParams())
 
   const anyActive =
-    !!userParam || !!fromParam || !!toParam || flagOnly || !!minCostParam
+    !!userParam || !!fromParam || !!toParam || flagOnly || !!minCostParam || !!workspaceParam
 
   return (
     <section
@@ -90,18 +101,25 @@ export function FilterBar() {
         />
       </label>
 
-      <label className={labelCls + " w-full sm:w-28"}>
-        <span>Min cost ($)</span>
-        <input
-          type="number"
-          min="0"
-          step="0.5"
-          value={minCostParam}
-          onChange={(e) => setOne("min_cost", e.target.value || null)}
-          placeholder="0.00"
+      <label className={labelCls + " w-full sm:w-44"}>
+        <span>Workspace</span>
+        <select
+          value={workspaceParam}
+          onChange={(e) => setOne("workspace_id", e.target.value || null)}
           className={inputCls}
-        />
+        >
+          <option value="">All workspaces</option>
+          {workspaces.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+              {w.org_id ? " · org" : " · personal"}
+            </option>
+          ))}
+        </select>
       </label>
+
+      {/* Min-cost filter hidden pre-launch (see ROADMAP.md) — backend
+          still accepts min_cost query param, UI surface just gone. */}
 
       <label className="flex items-center gap-2 font-mono text-caption text-ink-muted">
         <input

@@ -1,5 +1,6 @@
+import { useMemo } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { listSessions } from "../lib/api"
+import { listSessions, listWorkspaces, type Workspace } from "../lib/api"
 import { FilterBar } from "../features/sessions/FilterBar"
 import { useFilters } from "../features/sessions/filters"
 import { SessionsTable } from "../features/sessions/SessionsTable"
@@ -27,6 +28,19 @@ export function SessionsListPage() {
     queryFn: () => listSessions(filters),
   })
 
+  const workspacesQuery = useQuery<Workspace[]>({
+    queryKey: ["me", "workspaces"],
+    queryFn: listWorkspaces,
+    staleTime: 60_000,
+    meta: { silent: true },
+  })
+
+  const workspaceNameById = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const w of workspacesQuery.data ?? []) m.set(w.id, w.name)
+    return m
+  }, [workspacesQuery.data])
+
   return (
     <div className="space-y-4">
       <header className="border-b border-dashed border-rule pb-4">
@@ -48,7 +62,10 @@ export function SessionsListPage() {
           onRetry={() => queryClient.invalidateQueries({ queryKey: ["sessions"] })}
         />
       ) : (
-        <SessionsTable sessions={query.data.items} />
+        <SessionsTable
+          sessions={query.data.items}
+          workspaceNameById={workspaceNameById}
+        />
       )}
     </div>
   )
