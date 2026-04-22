@@ -144,6 +144,10 @@ class CheckoutRouter:
                 success_url=body.success_url,
                 cancel_url=body.cancel_url,
                 client_reference_id=str(user_id),
+                # Surface the "Add promotion code" field on the hosted page.
+                # Default Stripe behavior hides it — we expose it so launch /
+                # beta / partner codes work without manual URL hacking.
+                allow_promotion_codes=True,
                 metadata={
                     "user_id": str(user_id),
                     "plan": body.plan,
