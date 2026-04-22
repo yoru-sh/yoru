@@ -29,19 +29,21 @@ def _duration_seconds(started_at: datetime | None, ended_at: datetime | None) ->
 
 
 def _build_summary(sess: SessionRow) -> str:
-    """Render the deterministic 3-line Receipt per BACKEND-API-V0.md §4.4."""
+    """Render the deterministic 2-line Receipt summary.
+
+    Tokens / cost line removed pre-launch (see ROADMAP.md — we position
+    Receipt as an audit/trail tool, not a token tracker). The underlying
+    fields stay populated in the Session row so we can re-add the line
+    with one edit when the decision lands.
+    """
     duration = _duration_seconds(sess.started_at, sess.ended_at)
     line1 = (
         f"{sess.tools_count} tools across {sess.files_count} files "
         f"in {duration}s."
     )
-    line2 = (
-        f"Tokens: {sess.tokens_input}→{sess.tokens_output}  "
-        f"Cost: ${sess.cost_usd:.2f}."
-    )
     flags: Sequence[str] = list(sess.flags or [])
-    line3 = f"Flags: {', '.join(flags)}." if flags else "Flags: none."
-    return "\n".join([line1, line2, line3])
+    line2 = f"Flags: {', '.join(flags)}." if flags else "Flags: none."
+    return "\n".join([line1, line2])
 
 
 class SummaryRouter:

@@ -13,9 +13,12 @@ from sqlmodel import Session as SQLSession, select
 
 from .db import get_session
 from .deps import require_current_user
+from dataclasses import asdict
 from .models import (
     Event,
     EventOut,
+    FileChangedOut,
+    ScoreBreakdown,
     Session as SessionRow,
     SessionDetail,
     SessionListItem,
@@ -23,9 +26,111 @@ from .models import (
     TrailOut,
     TrailSession,
 )
+from .scoring import compute_score
 
 # Tool-name classes for path/content extraction (v1 timeline enrichment).
 _FILE_TOOLS = frozenset({"Read", "Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+# Tools that WRITE files (distinct from the read-only _FILE_TOOLS above).
+_FILE_WRITE_TOOLS = frozenset({"Edit", "Write", "MultiEdit", "NotebookEdit"})
+
+
+_TOOL_INPUT_STR_CAP = 4000
+_TOOL_INPUT_LIST_CAP = 50
+
+
+def _cap_value(v):
+    """Recursively cap a tool_input value for wire transport.
+
+    Strings → truncated to _TOOL_INPUT_STR_CAP chars with a trailing marker.
+    Lists → first _TOOL_INPUT_LIST_CAP items, recursively capped.
+    Dicts → recursively capped.
+    Everything else → passed through.
+    """
+    if isinstance(v, str):
+        if len(v) > _TOOL_INPUT_STR_CAP:
+            return v[:_TOOL_INPUT_STR_CAP] + f"…[+{len(v) - _TOOL_INPUT_STR_CAP} chars]"
+        return v
+    if isinstance(v, list):
+        capped = [_cap_value(x) for x in v[:_TOOL_INPUT_LIST_CAP]]
+        if len(v) > _TOOL_INPUT_LIST_CAP:
+            capped.append(f"…[+{len(v) - _TOOL_INPUT_LIST_CAP} items]")
+        return capped
+    if isinstance(v, dict):
+        return {k: _cap_value(vv) for k, vv in v.items()}
+    return v
+
+
+def _cap_tool_input(ti: dict) -> dict:
+    return {k: _cap_value(v) for k, v in ti.items()}
+
+
+def _count_lines(s: str | None) -> int:
+    if not s:
+        return 0
+    # Count lines the way a diff would: non-empty content => at least 1.
+    return s.count("\n") + (1 if s and not s.endswith("\n") else 0)
+
+
+def _summarize_files_changed(events_asc: list[Event]) -> list[FileChangedOut]:
+    """Aggregate file-change events into one FileChangedOut per path.
+
+    op: first seen Write => create, otherwise edit. Delete is not yet emitted
+    by the hook (v1 future). additions/deletions are line counts pulled from
+    tool_input.new_string / old_string (Edit), tool_input.content (Write),
+    summed across all events touching the same path.
+    """
+    # Walk events in REVERSE chrono so the first time we see a path is its
+    # MOST RECENT write — and the output list preserves that order (Python
+    # dict insertion order), putting the freshest file at the top of the
+    # rail panel. Matches the Timeline + Red Flags "newest-first" convention.
+    by_path: dict[str, FileChangedOut] = {}
+    for e in reversed(events_asc):
+        # Include any event that writes a file — either kind=file_change (post
+        # inference by events_router) OR a tool_use whose tool is a known
+        # writer. Historical rows where the hook posted kind=tool_use without
+        # letting _infer_kind fire (early v0 ingests) would otherwise be
+        # dropped, leaving an empty Files Changed rail.
+        tool_for_check = e.tool or (e.raw.get("tool_name") if isinstance(e.raw, dict) else None)
+        is_writer = tool_for_check in _FILE_WRITE_TOOLS
+        if not (e.kind == "file_change" or is_writer):
+            continue
+        path = e.path
+        if not path:
+            continue
+        raw = e.raw if isinstance(e.raw, dict) else {}
+        tool_input = raw.get("tool_input") if isinstance(raw.get("tool_input"), dict) else {}
+        tool = e.tool or raw.get("tool_name")
+        # Compute adds/dels only for known writer tools; other file_change
+        # rows (test fixtures, legacy ingests) still surface with zero counts
+        # so the UI can show the row.
+        adds, dels = 0, 0
+        if tool == "Write":
+            adds = _count_lines(tool_input.get("content") if isinstance(tool_input, dict) else None)
+        elif tool == "Edit":
+            adds = _count_lines(tool_input.get("new_string") if isinstance(tool_input, dict) else None)
+            dels = _count_lines(tool_input.get("old_string") if isinstance(tool_input, dict) else None)
+        elif tool == "MultiEdit":
+            edits = tool_input.get("edits") if isinstance(tool_input, dict) else None
+            if isinstance(edits, list):
+                for ed in edits:
+                    if isinstance(ed, dict):
+                        adds += _count_lines(ed.get("new_string") if isinstance(ed.get("new_string"), str) else None)
+                        dels += _count_lines(ed.get("old_string") if isinstance(ed.get("old_string"), str) else None)
+        elif tool == "NotebookEdit":
+            adds = _count_lines(tool_input.get("new_source") if isinstance(tool_input, dict) else None)
+        existing = by_path.get(path)
+        if existing is None:
+            op = "create" if tool == "Write" else "edit"
+            by_path[path] = FileChangedOut(path=path, op=op, additions=adds, deletions=dels)
+        else:
+            by_path[path] = FileChangedOut(
+                path=path,
+                op=existing.op,
+                additions=existing.additions + adds,
+                deletions=existing.deletions + dels,
+            )
+    return list(by_path.values())
 
 
 def _enrich_events(events_asc: list[Event]) -> list[EventOut]:
@@ -133,6 +238,14 @@ def _enrich_events(events_asc: list[Event]) -> list[EventOut]:
                 output = blob[:800]
         elif isinstance(tr, str) and tr.strip():
             output = tr[:800]
+        # Structured tool_input (capped) for the frontend per-tool detail view.
+        # Strings inside get capped at 4000 chars each, lists at 50 items.
+        # Non-dict raw.tool_input values are dropped — the frontend expects
+        # dict-shaped input for its renderers.
+        tool_input_out: Optional[dict] = None
+        if isinstance(raw.get("tool_input"), dict):
+            tool_input_out = _cap_tool_input(raw["tool_input"])
+
         out.append(EventOut.model_validate({
             **e.model_dump(),
             "tool": tool,
@@ -141,7 +254,28 @@ def _enrich_events(events_asc: list[Event]) -> list[EventOut]:
             "duration_ms": duration_ms,
             "group_key": group_key,
             "output": output,
+            "tool_input": tool_input_out,
         }))
+        # Synthetic error event: when tool_response carries an error, emit a
+        # second EventOut (kind="error") sharing the same ts so the frontend
+        # renders [err] the agent's failure adjacent to the [tool] call.
+        # Not persisted — virtual row, id reuses the tool event's id (negated
+        # to avoid clashing with real event ids on the client).
+        err_text: Optional[str] = None
+        if isinstance(tr, dict) and isinstance(tr.get("error"), str) and tr["error"].strip():
+            err_text = tr["error"].strip()
+        if err_text:
+            out.append(EventOut.model_validate({
+                **e.model_dump(),
+                "id": -abs(e.id) if e.id else 0,
+                "kind": "error",
+                "tool": tool,
+                "path": path,
+                "content": err_text[:400],
+                "duration_ms": 0,
+                "group_key": f"err:{(path or '')[:40]}",
+                "output": None,
+            }))
     return out
 
 
@@ -163,6 +297,9 @@ class SessionsRouter:
         self.router.get("/{session_id}/trail", response_model=TrailOut)(
             self.get_session_trail
         )
+        self.router.delete("/{session_id}/tailer-events", status_code=204)(
+            self.delete_tailer_events
+        )
 
     def list_sessions(
         self,
@@ -170,6 +307,7 @@ class SessionsRouter:
         to_ts: Optional[datetime] = None,
         flagged: Optional[bool] = None,
         min_cost: Optional[float] = None,
+        workspace_id: Optional[str] = Query(None),
         limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
         db: SQLSession = Depends(get_session),
@@ -184,6 +322,8 @@ class SessionsRouter:
             filters.append(SessionRow.flagged == flagged)
         if min_cost is not None:
             filters.append(SessionRow.cost_usd >= min_cost)
+        if workspace_id is not None:
+            filters.append(SessionRow.workspace_id == workspace_id)
 
         list_stmt = (
             select(SessionRow)
@@ -220,19 +360,108 @@ class SessionsRouter:
         if row is None or row.user != current_user:
             raise HTTPException(status_code=404, detail="session not found")
 
-        # Fetch last 1000 events (ordered DESC, then reverse to ASC).
+        # Fetch last 1000 events (ordered DESC, then reverse to ASC) +
+        # always include ANY flagged event outside that window. Flagged
+        # events are audit-critical and must never be silently dropped.
         recent = db.exec(
             select(Event)
             .where(Event.session_id == session_id)
             .order_by(Event.ts.desc())
             .limit(1000)
         ).all()
-        events_asc = list(reversed(recent))
+        recent_ids = {e.id for e in recent}
+        # Pull flagged events older than the window.
+        flagged_extra = db.exec(
+            select(Event)
+            .where(Event.session_id == session_id)
+            .where(Event.flags != [])  # type: ignore[arg-type]
+        ).all()
+        for ev in flagged_extra:
+            if ev.id not in recent_ids and (ev.flags or []):
+                recent.append(ev)
+                recent_ids.add(ev.id)
+        events_asc = sorted(recent, key=lambda e: e.ts)
 
         events_out = _enrich_events(events_asc)
-        return SessionDetail.model_validate(
-            {**row.model_dump(), "events": events_out}
+        files_out = _summarize_files_changed(events_asc)
+
+        # Compute score from the event stream + row aggregates. Derives
+        # tool_call_count + error_count from the events; the rest from
+        # the denormalized row fields. Cheap (O(events)).
+        tool_call_count = sum(
+            1 for e in events_asc if e.kind in ("tool_use", "file_change")
         )
+        error_count = sum(1 for e in events_asc if e.kind == "error")
+        score = compute_score(
+            files_count=row.files_count,
+            tools_called=row.tools_called,
+            tokens_output=row.tokens_output,
+            tool_call_count=tool_call_count,
+            error_count=error_count,
+            flags=row.flags,
+        )
+        score_out = ScoreBreakdown(**asdict(score))
+
+        # SessionDetail.files_changed is now list[FileChangedOut] — overwrite
+        # the flat list[str] from row.model_dump() with the structured form.
+        # title is already on row.model_dump() (persisted on session row).
+        return SessionDetail.model_validate(
+            {
+                **row.model_dump(),
+                "files_changed": files_out,
+                "events": events_out,
+                "score": score_out,
+            }
+        )
+
+    def delete_tailer_events(
+        self,
+        session_id: str,
+        db: SQLSession = Depends(get_session),
+        current_user: str = Depends(require_current_user),
+    ) -> Response:
+        """Wipe events originating from the transcript tailer for a session.
+
+        Called before a `--backfill` run so re-ingesting the same JSONL doesn't
+        double-count tokens / assistant messages / thinking blocks. Identified
+        by `raw.hook_event_name == "TranscriptTail"` (the tailer's marker) —
+        hook-sourced events (user prompts, tool calls, notifications) are
+        left untouched.
+
+        Also rolls back the session aggregate (tokens + cost) by the sum of
+        the deleted rows so the totals stay consistent after the wipe. The
+        subsequent backfill re-increments them from scratch.
+        """
+        row = db.exec(
+            select(SessionRow).where(SessionRow.id == session_id)
+        ).first()
+        if row is None or row.user != current_user:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        # Pull the tailer rows first so we can offset the aggregate.
+        tailer_rows = db.exec(
+            select(Event).where(Event.session_id == session_id)
+        ).all()
+        offset_in = 0
+        offset_out = 0
+        offset_cost = 0.0
+        deleted = 0
+        for ev in tailer_rows:
+            raw = ev.raw if isinstance(ev.raw, dict) else {}
+            if raw.get("hook_event_name") != "TranscriptTail":
+                continue
+            offset_in += int(ev.tokens_input or 0)
+            offset_out += int(ev.tokens_output or 0)
+            offset_cost += float(ev.cost_usd or 0.0)
+            db.delete(ev)
+            deleted += 1
+        if deleted:
+            row.tokens_input = max(0, row.tokens_input - offset_in)
+            row.tokens_output = max(0, row.tokens_output - offset_out)
+            row.cost_usd = max(0.0, row.cost_usd - offset_cost)
+            db.add(row)
+        db.commit()
+        return Response(status_code=204)
 
     def get_session_trail(
         self,

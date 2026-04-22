@@ -19,14 +19,16 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlmodel import Session as DBSession, select
+
+from apps.api.api.dependencies.auth import SESSION_COOKIE_NAME
 
 from .db import get_session
 from .models import HookToken
 
 _BEARER_PREFIX = "Bearer "
-_TOKEN_PREFIX = "rcpt_"
+_TOKEN_PREFIX = "rcpt_"  # Matches both legacy `rcpt_*` and new `rcpt_u_*` / `rcpt_s_*`.
 
 
 def _naive_utc_now() -> datetime:
@@ -71,24 +73,66 @@ def _resolve_token(authorization: str, session: DBSession) -> str:
     return row.user
 
 
+def _resolve_from_cookie(request: Request) -> str | None:
+    """Resolve the dashboard session cookie (`rcpt_session`, Supabase JWT) to a
+    user email string. Returns None if no cookie is present; raises 401 if the
+    cookie is present but invalid.
+
+    This is the dashboard auth path — cookies set by `/auth/signin` in
+    `routers/auth/cookie_router.py`. CLI tools keep using the `rcpt_*` bearer
+    flow via `_resolve_token` above.
+    """
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        from libs.supabase.supabase import SupabaseManager
+        supabase = SupabaseManager()
+        user_response = supabase.client.auth.get_user(token)
+        if not user_response or not user_response.user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid session cookie",
+            )
+        return user_response.user.email or ""
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid or expired session cookie",
+        )
+
+
 def get_current_user(
+    request: Request,
     authorization: str | None = Header(default=None),
     session: DBSession = Depends(get_session),
 ) -> str | None:
-    """Optional bearer — returns None when header absent (v0 backward-compat)."""
-    if authorization is None:
-        return None
-    return _resolve_token(authorization, session)
+    """Optional auth — returns the user email or None when no creds.
+
+    Resolution order:
+      1. `Authorization: Bearer rcpt_*`  (CLI hook-token flow)
+      2. `rcpt_session` cookie (Supabase JWT, dashboard flow)
+      3. None (v0 backward-compat for ingest fallback to `EventIn.user`)
+    """
+    if authorization is not None:
+        return _resolve_token(authorization, session)
+    return _resolve_from_cookie(request)
 
 
 def require_current_user(
+    request: Request,
     authorization: str | None = Header(default=None),
     session: DBSession = Depends(get_session),
 ) -> str:
-    """Strict bearer — 401 on missing header."""
-    if authorization is None:
+    """Strict auth — 401 if neither bearer header nor session cookie resolves."""
+    if authorization is not None:
+        return _resolve_token(authorization, session)
+    user = _resolve_from_cookie(request)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="authorization required",
         )
-    return _resolve_token(authorization, session)
+    return user

@@ -1,6 +1,10 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html", "./src/**/*.{js,jsx,ts,tsx}"],
+  content: [
+    "./index.html",
+    "./src/**/*.{js,jsx,ts,tsx}",
+    "../packages/receipt-ui/src/**/*.{js,jsx,ts,tsx}",
+  ],
   darkMode: "class",
   theme: {
     extend: {
@@ -55,6 +59,7 @@ export default {
           secret:    { DEFAULT: "rgb(var(--flag-secret)    / <alpha-value>)", bg: "#450a1f", fg: "#ffe4e6" },
           env:       { DEFAULT: "rgb(var(--flag-env)       / <alpha-value>)", bg: "#7f1d1d", fg: "#fee2e2" },
           shell:     { DEFAULT: "rgb(var(--flag-shell)     / <alpha-value>)", bg: "#7c2d12", fg: "#ffedd5" },
+          db:        { DEFAULT: "rgb(var(--flag-db)        / <alpha-value>)", bg: "#4a044e", fg: "#f5d0fe" },
           migration: { DEFAULT: "rgb(var(--flag-migration) / <alpha-value>)", bg: "#78350f", fg: "#fef3c7" },
           ci:        { DEFAULT: "rgb(var(--flag-ci)        / <alpha-value>)", bg: "#713f12", fg: "#fef9c3" },
         },
@@ -96,9 +101,17 @@ export default {
           "0%":   { opacity: "0", transform: "translateY(-2px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        // Anchor-scroll flash: ringed amber halo that fades out over 1.6s.
+        // Used by SessionDetailPage when navigating to `#event-<id>`.
+        "event-flash": {
+          "0%":   { backgroundColor: "rgb(var(--accent-500) / 0.20)" },
+          "60%":  { backgroundColor: "rgb(var(--accent-500) / 0.15)" },
+          "100%": { backgroundColor: "transparent" },
+        },
       },
       animation: {
         "feed-in": "feed-in 200ms ease-out",
+        "event-flash": "event-flash 1600ms ease-out",
       },
     },
   },

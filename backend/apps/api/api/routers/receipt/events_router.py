@@ -11,8 +11,12 @@ vault/USER_STORIES-v4.md US-V4-1 AC #1.
 """
 from __future__ import annotations
 
+import logging
 import os
+import uuid
 from datetime import datetime, timezone
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -47,8 +51,59 @@ from .models import (
     IngestAck,
     Session as SessionRow,
 )
+from .pricing import compute_cost_usd, summarize_tokens
 from .red_flags import scan_event
 from .summary_router import _build_summary
+
+
+_route_logger = logging.getLogger("apps.api.receipt.routing")
+
+
+def _resolve_workspace(user: str, cwd: str | None, git_remote: str | None) -> str | None:
+    """Resolve the target workspace_id for this event via Supabase.
+
+    Priority order (server-side in resolve_workspace SQL RPC):
+      1. workspace_repos exact match on (host, owner, repo) parsed from git_remote
+      2. route_rules match on cwd or git_remote globs (escape-hatch)
+      3. user's personal workspace (fallback, always succeeds if user has one)
+
+    Returns None only when Supabase is unreachable / user unknown — ingestion
+    never blocks on routing; the session lands with workspace_id=NULL and the
+    user can move it from the dashboard later.
+    """
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    anon = os.environ.get("SUPABASE_ANON_KEY", "")
+    if not supabase_url or not anon:
+        return None
+    try:
+        resp = httpx.post(
+            f"{supabase_url}/rest/v1/rpc/resolve_workspace",
+            headers={
+                "apikey": anon,
+                "Authorization": f"Bearer {anon}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "p_user_email": user,
+                "p_cwd": cwd,
+                "p_git_remote": git_remote,
+            },
+            timeout=2.0,
+        )
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        _route_logger.warning("workspace_rpc_failed err=%s", type(exc).__name__)
+        return None
+    if resp.status_code >= 400:
+        _route_logger.warning(
+            "workspace_rpc_status code=%s body=%s",
+            resp.status_code, resp.text[:200],
+        )
+        return None
+    try:
+        target = resp.json()
+    except Exception:
+        return None
+    return target if isinstance(target, str) and target else None
 
 # tool_name → kind classifier (closes gap #3; see vault/EVENTIN-V1-SPEC.md §2)
 _FILE_CHANGE_TOOLS: frozenset[str] = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
@@ -106,11 +161,14 @@ def _build_paywall_checkout_url(org_id: str) -> str:
     return str(response.url)
 
 
-def _resolve_quota_org_id(user: str) -> str:
-    """Same derivation as `billing.checkout._resolve_org_id` — 1:1 personal org in v0."""
-    from apps.api.api.routers.billing.checkout import _resolve_org_id
+_QUOTA_ORG_NS = uuid.UUID("0e7b0f20-6b2f-4a6a-b0a1-0cbf3d1e7f00")
 
-    return str(_resolve_org_id(user))
+
+def _resolve_quota_org_id(user: str) -> str:
+    """Deterministic UUID5 per user string — 1:1 personal-org mapping for the
+    Receipt v0 quota path. Kept here since the Polar checkout flow now uses
+    the real Supabase auth.users.id as customer_external_id."""
+    return str(uuid.uuid5(_QUOTA_ORG_NS, user))
 
 
 class EventsRouter:
@@ -152,6 +210,10 @@ class EventsRouter:
         """
         touched: dict[str, SessionRow] = {}
         flagged_ids: set[str] = set()
+        # Track first flagged event per session so the notification anchor can
+        # deep-link right into the event that triggered the flag. Populated
+        # after the Event row gets an id via session.flush().
+        first_flagged_event_id: dict[str, int] = {}
         accepted = 0
 
         self._log.info("events.received", extra={"batch_size": len(batch.events)})
@@ -215,6 +277,22 @@ class EventsRouter:
                     )
                     if isinstance(c, str) and c:
                         e.content = c[:400]  # cap at 400 chars for display
+
+            # Auto-compute cost + tokens for kind=token events (transcript
+            # tailer ships raw usage + model, pricing lookup happens here so
+            # rates stay centralized and auto-refreshed from LiteLLM).
+            if e.kind == "token":
+                raw = e.raw if isinstance(e.raw, dict) else {}
+                usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else None
+                model = raw.get("model") or ""
+                if usage and isinstance(model, str):
+                    if e.tokens_input == 0 and e.tokens_output == 0:
+                        t_in, t_out = summarize_tokens(usage)
+                        e.tokens_input = t_in
+                        e.tokens_output = t_out
+                    if e.cost_usd == 0.0:
+                        e.cost_usd = compute_cost_usd(model, usage)
+
             flags = scan_event(e)
 
             sess = touched.get(e.session_id)
@@ -230,10 +308,49 @@ class EventsRouter:
                     session.flush()
                 touched[e.session_id] = sess
 
-            if e.kind == "session_start":
-                if ts < sess.started_at:
-                    sess.started_at = ts
-            elif e.kind == "session_end":
+            # Phase C/W1 — routing: capture cwd/git context on first event of
+            # a session and resolve the target workspace via resolve_workspace
+            # RPC (workspace_repos → route_rules → personal fallback). Frozen
+            # once set so later `cd`s mid-session don't re-route.
+            if sess.workspace_id is None:
+                if e.cwd or e.git_remote:
+                    sess.cwd = e.cwd
+                    sess.git_remote = e.git_remote
+                    sess.git_branch = e.git_branch
+                sess.workspace_id = _resolve_workspace(
+                    user=effective_user,
+                    cwd=e.cwd,
+                    git_remote=e.git_remote,
+                )
+
+            # First user-prompt message sets the session title. Cheap
+            # idempotent: only fires when sess.title is still None.
+            if (
+                sess.title is None
+                and e.kind == "message"
+                and e.tool == "user"
+                and e.content
+            ):
+                first_line = next(
+                    (ln.strip() for ln in e.content.split("\n") if ln.strip()),
+                    "",
+                )
+                if first_line:
+                    sess.title = first_line[:80]
+
+            # Push started_at backward on ANY event with an earlier ts.
+            # Fixes backfill: the hook-ingested events land first and set
+            # started_at to "now"; a later transcript backfill carries
+            # events from days earlier and must win. (Previously only
+            # session_start events could push the boundary back.)
+            if ts < sess.started_at:
+                sess.started_at = ts
+                # Summary captured earlier with a partial view is stale —
+                # clear so the next session_end rebuilds it with the full
+                # backfilled dataset.
+                sess.summary = None
+
+            if e.kind == "session_end":
                 pass
             elif e.kind == "tool_use":
                 sess.tools_count += 1
@@ -259,21 +376,27 @@ class EventsRouter:
                 sess.flagged = True
                 flagged_ids.add(sess.id)
 
-            session.add(
-                Event(
-                    session_id=e.session_id,
-                    ts=ts,
-                    kind=e.kind,
-                    tool=e.tool,
-                    path=e.path,
-                    content=e.content,
-                    tokens_input=e.tokens_input,
-                    tokens_output=e.tokens_output,
-                    cost_usd=e.cost_usd,
-                    flags=flags,
-                    raw=e.raw,
-                )
+            ev_row = Event(
+                session_id=e.session_id,
+                ts=ts,
+                kind=e.kind,
+                tool=e.tool,
+                path=e.path,
+                content=e.content,
+                tokens_input=e.tokens_input,
+                tokens_output=e.tokens_output,
+                cost_usd=e.cost_usd,
+                flags=flags,
+                raw=e.raw,
+                cwd=e.cwd,
+                git_remote=e.git_remote,
+                git_branch=e.git_branch,
             )
+            session.add(ev_row)
+            if flags and e.session_id not in first_flagged_event_id:
+                session.flush()  # assign id
+                if ev_row.id is not None:
+                    first_flagged_event_id[e.session_id] = ev_row.id
             receipt_events_ingested_total.labels(
                 kind=e.kind or "unknown",
                 flagged=str(bool(flags)).lower(),
@@ -282,20 +405,18 @@ class EventsRouter:
 
         session.commit()
 
-        # Auto-summary on session_end: if any event in this batch marked a session
-        # as ended and the session has no summary yet, build & persist the
-        # deterministic 3-liner now so the frontend detail page doesn't 404.
-        session_end_ids = {
-            e.session_id for e in batch.events if e.kind == "session_end"
-        }
-        if session_end_ids:
-            for sid in session_end_ids:
-                sess = touched.get(sid) or session.get(SessionRow, sid)
-                if sess is None or sess.summary is not None:
-                    continue
-                sess.summary = _build_summary(sess)
-                session.add(sess)
-            session.commit()
+        # Rebuild summary for every session touched in this batch. The
+        # previous gates (summary=None, or session_end only) froze the
+        # summary mid-backfill with partial totals — and backfills send 50
+        # events at a time, so by the time aggregates fully settle the first
+        # batch's summary is long stale. Per-batch rebuild is cheap and
+        # keeps the summary honest.
+        for sid, sess in touched.items():
+            if sess is None:
+                continue
+            sess.summary = _build_summary(sess)
+            session.add(sess)
+        session.commit()
 
         self._log.info(
             "events.ingested",
@@ -305,6 +426,34 @@ class EventsRouter:
                 "flagged": len(flagged_ids),
             },
         )
+
+        # Fire in-app notifications for any session that picked up a red flag
+        # during this batch. Best-effort — ingest ack is the SLO, notification
+        # failure is logged and swallowed. Dedup per session: one notification
+        # per (session, flag-kind) not per event.
+        if flagged_ids and current_user:
+            from .notify import notify_user_by_email
+            for sid in flagged_ids:
+                sess = touched.get(sid)
+                if sess is None:
+                    continue
+                flags_summary = ", ".join(sess.flags[:3])
+                more = len(sess.flags) - 3
+                if more > 0:
+                    flags_summary += f" · +{more} more"
+                # Anchor to the first flagged event when we have one so the
+                # dashboard scrolls + flashes directly on the problem line
+                # (see SessionDetailPage hash handler).
+                ev_id = first_flagged_event_id.get(sid)
+                action_url = f"/s/{sid}#event-{ev_id}" if ev_id else f"/s/{sid}"
+                notify_user_by_email(
+                    email=current_user,
+                    type="warning",
+                    title=f"Red flag in session {sid[:8]}",
+                    message=f"Detected: {flags_summary}. Review trail before merging.",
+                    action_url=action_url,
+                    metadata={"session_id": sid, "flags": sess.flags, "event_id": ev_id},
+                )
 
         return IngestAck(
             accepted=accepted,

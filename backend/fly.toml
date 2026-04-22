@@ -1,0 +1,39 @@
+app = "receipt-api"
+primary_region = "cdg"  # Paris — closest to Loic (Switzerland)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_ENV = "production"
+  ENVIRONMENT = "production"
+  # SQLite lives on the mounted volume. Every write persists across restarts.
+  RECEIPT_DB_URL = "sqlite:////data/receipt.db"
+  # Override at deploy if the marketing / dashboard land on different origins.
+  CORS_ALLOWED_ORIGINS = "https://app.receipt.dev,https://receipt.dev"
+
+# Single Fly volume mounted at /data — the *only* persistent path. Anything
+# outside this directory is wiped on each deploy.
+[mounts]
+  source = "receipt_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8002
+  force_https = true
+  auto_stop_machines = "off"    # SQLite single-writer: never suspend the VM
+  auto_start_machines = true
+  min_machines_running = 1      # one writer, always on
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"              # bump to 1gb when sessions > 1k/day
+  cpus = 1

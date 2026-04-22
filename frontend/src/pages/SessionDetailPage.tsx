@@ -1,3 +1,4 @@
+import { useEffect } from "react"
 import { Link, useParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { ApiError, getSession } from "../lib/api"
@@ -12,7 +13,29 @@ export function SessionDetailPage() {
     queryKey: ["session", id],
     queryFn: () => getSession(id as string),
     enabled: Boolean(id),
+    // Live-refresh: new events (hooks + transcript tailer) flow in every few
+    // seconds. Polling every 5s keeps the timeline warm without sockets.
+    refetchInterval: 5000,
+    // Keep polling when the tab is not focused so background sessions
+    // continue to update; stops ONLY when the session has ended.
+    refetchIntervalInBackground: false,
   })
+
+  // Anchor auto-scroll + highlight: when the URL has `#event-<id>`, scroll to
+  // that row once data is loaded, and flash it for 1.5s so it's easy to find.
+  useEffect(() => {
+    if (!query.data) return
+    const hash = window.location.hash
+    if (!hash.startsWith("#event-") && !hash.startsWith("#group-")) return
+    const target = document.querySelector(hash) as HTMLElement | null
+    if (!target) return
+    target.scrollIntoView({ behavior: "smooth", block: "center" })
+    target.classList.add("motion-safe:animate-event-flash")
+    const t = setTimeout(() => {
+      target.classList.remove("motion-safe:animate-event-flash")
+    }, 1600)
+    return () => clearTimeout(t)
+  }, [query.data])
 
   if (!id) return <NotFound />
 

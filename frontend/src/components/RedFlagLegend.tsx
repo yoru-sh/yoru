@@ -9,7 +9,7 @@ interface LegendEntry {
 const FLAGS: LegendEntry[] = [
   { kind: 'secret',    label: 'secret-pattern',  blurb: 'API key, token, or credential matched a regex' },
   { kind: 'env',       label: 'env-mutation',    blurb: '.env* file was created or modified' },
-  { kind: 'shell',     label: 'shell-rm',        blurb: 'rm / rm -rf invoked in a shell tool call' },
+  { kind: 'shell',     label: 'shell-destructive', blurb: 'rm, curl|sh pipe-to-shell, or git push --force / reset --hard' },
   { kind: 'migration', label: 'migration-edit',  blurb: 'database migration file was touched' },
   { kind: 'ci',        label: 'ci-config-edit',  blurb: 'CI config (.github/, ci.yml, …) was edited' },
 ]

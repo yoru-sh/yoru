@@ -1,0 +1,105 @@
+export type RedFlagKind =
+  | "secret-pattern"
+  | "shell-destructive"
+  | "db-destructive"
+  | "migration-edit"
+  | "env-mutation"
+  | "ci-config-edit"
+
+export type EventType = "tool_call" | "file_change" | "error" | "message"
+
+export type FileOp = "create" | "edit" | "delete"
+
+export interface Session {
+  id: string
+  user_email: string
+  started_at: string
+  ended_at: string | null
+  duration_ms: number
+  tool_count: number
+  cost_usd: number
+  tokens_input: number
+  tokens_output: number
+  flag_count: number
+  flags: RedFlagKind[]
+  /** Auto-derived from the first user prompt; falls back to id when null. */
+  title?: string | null
+  /** Target workspace resolved at ingestion. NULL means routing fell back
+   *  to the user's personal workspace (or unknown if resolve_workspace
+   *  couldn't reach Supabase). */
+  workspace_id?: string | null
+}
+
+export interface SessionEvent {
+  id: string
+  session_id: string
+  at: string
+  type: EventType
+  tool_name?: string
+  tool_input?: unknown
+  file_path?: string
+  file_op?: FileOp
+  error_message?: string
+  text?: string
+  /** Primary flag (backward compat) = flags[0]. */
+  flag?: RedFlagKind
+  /** All red flags triggered by this event (an event can trip multiple). */
+  flags?: RedFlagKind[]
+  /** Tool stdout/stderr/error preview (capped 800 chars). */
+  output?: string
+  // SESSION-DETAIL-V1 additions (backend EventOut v1, all optional / non-breaking).
+  tool?: string
+  path?: string
+  content?: string
+  duration_ms?: number
+  group_key?: string
+  /** Per-event cost in USD (backend EventOut) — powers Hero cost sparkline. */
+  cost_usd?: number
+  tokens_input?: number
+  tokens_output?: number
+}
+
+export interface FileChanged {
+  path: string
+  op: FileOp
+  additions: number
+  deletions: number
+}
+
+export interface SessionScore {
+  overall: number
+  throughput: number
+  reliability: number
+  safety: number
+  grade: string
+  breakdown: Record<string, unknown>
+}
+
+export interface SessionDetail extends Session {
+  events: SessionEvent[]
+  /** Per-call token+cost breakdown (kind=token on the wire); not shown inline. */
+  usage_events?: SessionEvent[]
+  files_changed: FileChanged[]
+  summary?: string | null
+  score?: SessionScore | null
+}
+
+export interface Summary {
+  text: string
+  model: string
+  cached_at: string
+}
+
+export interface Filters {
+  user?: string
+  date_from?: string
+  date_to?: string
+  flag_only?: boolean
+  min_cost?: number
+  workspace_id?: string
+}
+
+export interface SessionList {
+  items: Session[]
+  total: number
+}

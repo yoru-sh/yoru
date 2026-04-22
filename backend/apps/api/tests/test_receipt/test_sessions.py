@@ -194,7 +194,9 @@ def test_detail_happy_path(client, db_session, alice_headers):
     assert resp.status_code == 200
     body = resp.json()
     assert body["id"] == "sd1"
-    assert body["files_changed"] == ["app.py", "README.md"]
+    # files_changed is computed from Event rows (FileChangedOut shape) — only
+    # the file_change event on app.py shows up, README.md isn't in events.
+    assert [f["path"] for f in body["files_changed"]] == ["app.py"]
     assert body["tools_called"] == ["Bash", "Edit"]
     assert body["flags"] == ["secret_aws"]
     assert body["summary"] is None

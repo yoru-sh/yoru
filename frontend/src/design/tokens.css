@@ -39,6 +39,7 @@
   --flag-secret:    136 19 55;  /* #881337 wine */
   --flag-env:       220 38 38;  /* #dc2626 red */
   --flag-shell:     234 88 12;  /* #ea580c orange */
+  --flag-db:        168 85 247; /* #a855f7 purple — destructive DB ops (distinct visual class from shell rm) */
   --flag-migration: 217 119 6;  /* #d97706 amber */
   --flag-ci:        202 138 4;  /* #ca8a04 honey */
 

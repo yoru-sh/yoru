@@ -18,7 +18,10 @@ function oneLineDetail(body: string): string {
   return first || "Server error"
 }
 
-function notifyQueryError(error: unknown): void {
+function notifyQueryError(error: unknown, meta?: Record<string, unknown>): void {
+  // Silent queries (background polls, best-effort widgets) opt out of the
+  // global error toast. Set `meta: { silent: true }` on the useQuery call.
+  if (meta?.silent === true) return
   if (error instanceof ApiError) {
     // 401: apiFetch's signOut latch + RequireAuth redirect handle it.
     // 404: page-level empty / not-found surface handles it.
@@ -31,10 +34,10 @@ function notifyQueryError(error: unknown): void {
 
 export const queryClient = new QueryClient({
   queryCache: new QueryCache({
-    onError: (error) => notifyQueryError(error),
+    onError: (error, query) => notifyQueryError(error, query.meta),
   }),
   mutationCache: new MutationCache({
-    onError: (error) => notifyQueryError(error),
+    onError: (error, _vars, _ctx, mutation) => notifyQueryError(error, mutation.meta),
   }),
   defaultOptions: {
     queries: {

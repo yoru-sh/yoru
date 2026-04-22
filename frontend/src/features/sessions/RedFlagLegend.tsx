@@ -15,9 +15,14 @@ const ROWS: LegendRow[] = [
     example: "sk_live_… in .env",
   },
   {
-    kind: "shell-rm",
-    meaning: "rm or rm -rf invocation",
-    example: "rm -rf node_modules",
+    kind: "shell-destructive",
+    meaning: "rm / rm -rf, curl|sh remote-code-exec, or git push --force / reset --hard",
+    example: "curl … | sh — git push --force — rm -rf node_modules",
+  },
+  {
+    kind: "db-destructive",
+    meaning: "DROP/TRUNCATE/DELETE-without-WHERE/UPDATE-without-WHERE on a database",
+    example: "DELETE FROM sessions",
   },
   {
     kind: "migration-edit",

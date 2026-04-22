@@ -1,12 +1,79 @@
 import { useState } from "react"
-import { Link, Outlet, useNavigate } from "react-router-dom"
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom"
+import { useQuery } from "@tanstack/react-query"
 import { useSession } from "../auth/useSession"
 import { UpgradeBanner } from "../features/billing/UpgradeBanner"
+import { NotificationBell } from "../features/notifications/NotificationBell"
+import { apiFetch, ApiError } from "../lib/api"
+
+const NAV: { to: string; label: string; end?: boolean }[] = [
+  { to: "/",                        label: "/sessions",       end: true },
+  { to: "/settings/workspaces",     label: "/workspaces" },
+  { to: "/settings/organizations",  label: "/organizations" },
+  { to: "/settings/tokens",         label: "/tokens" },
+  { to: "/settings/billing",        label: "/billing" },
+  { to: "/settings/profile",        label: "/profile" },
+]
+
+function navLinkClass({ isActive }: { isActive: boolean }) {
+  return (
+    "rounded-sm font-mono text-caption transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface " +
+    (isActive ? "text-ink" : "text-ink-muted hover:text-ink")
+  )
+}
+
+interface MeSubscription {
+  plan_name?: string
+  status?: string
+}
+
+async function fetchPlanBadge(): Promise<string> {
+  try {
+    const sub = await apiFetch<MeSubscription | null>("/me/subscription")
+    return (sub?.plan_name ?? "Free").toLowerCase()
+  } catch (err) {
+    // Silently fall back — backend may still be seeding the Free subscription.
+    if (err instanceof ApiError) return "free"
+    return "free"
+  }
+}
+
+const PLAN_STYLE: Record<string, string> = {
+  free: "bg-sunken text-ink-muted ring-rule",
+  pro:  "bg-accent-500/10 text-accent-500 ring-accent-500/40",
+  team: "bg-accent-500/20 text-accent-500 ring-accent-500/60 font-semibold",
+  org:  "bg-ink text-paper ring-ink font-semibold",
+}
+
+function PlanBadge({ plan }: { plan: string }) {
+  const style = PLAN_STYLE[plan] ?? PLAN_STYLE.free
+  return (
+    <Link
+      to="/settings/billing"
+      title={`Plan · ${plan}`}
+      className={
+        "inline-flex items-center rounded-sm px-2 py-0.5 font-mono text-micro font-semibold uppercase tracking-wider ring-1 ring-inset focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-surface " +
+        style
+      }
+    >
+      {plan}
+    </Link>
+  )
+}
 
 export function AppShell() {
-  const { session, signOut } = useSession()
+  const { user, signOut } = useSession()
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
+
+  const { data: plan = "free" } = useQuery({
+    queryKey: ["me", "subscription", "plan"],
+    queryFn: fetchPlanBadge,
+    enabled: !!user,
+    staleTime: 60_000,
+    retry: 0,
+    meta: { silent: true },
+  })
 
   async function onSignOut() {
     if (signingOut) return
@@ -28,15 +95,26 @@ export function AppShell() {
         Skip to content
       </a>
       <header className="border-b border-rule bg-surface">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
-          <Link
-            to="/"
-            className="rounded-sm font-mono text-sm font-semibold tracking-tight text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
-          >
-            receipt
-          </Link>
-          <div className="flex items-center gap-4">
-            <span className="text-caption text-ink-muted">{session?.user.email}</span>
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3">
+          <div className="flex items-center gap-6">
+            <Link
+              to="/"
+              className="rounded-sm font-mono text-sm font-semibold tracking-tight text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 focus-visible:ring-offset-paper"
+            >
+              <span aria-hidden="true">◆</span> receipt
+            </Link>
+            <nav aria-label="Primary" className="hidden items-center gap-5 md:flex">
+              {NAV.map((item) => (
+                <NavLink key={item.to} to={item.to} end={item.end} className={navLinkClass}>
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
+          </div>
+          <div className="flex items-center gap-3">
+            <PlanBadge plan={plan} />
+            <NotificationBell />
+            <span className="hidden text-caption text-ink-muted md:inline">{user?.email}</span>
             <button
               type="button"
               onClick={() => { void onSignOut() }}

@@ -11,7 +11,15 @@ from typing import Any, Literal, Optional
 from pydantic import model_validator
 from sqlmodel import JSON, Column, Field, SQLModel
 
-EventKind = Literal["tool_use", "file_change", "token", "error", "session_start", "session_end"]
+EventKind = Literal[
+    "tool_use",
+    "file_change",
+    "token",
+    "error",
+    "message",          # UserPromptSubmit / Notification / SubagentStop — human-facing text
+    "session_start",
+    "session_end",
+]
 
 
 def _utcnow() -> datetime:
@@ -39,6 +47,19 @@ class Session(SQLModel, table=True):
     files_changed: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     tools_called: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     summary: Optional[str] = Field(default=None)
+    # Human-readable title — auto-derived from the first user prompt (first
+    # 80 chars). Persisted on first user event; users can PATCH to override.
+    title: Optional[str] = Field(default=None)
+    # Routing target — the workspace this session belongs to. Resolved
+    # server-side via resolve_workspace RPC at first event and frozen for the
+    # session lifetime. NULL means routing couldn't resolve (unusual;
+    # normally the user's personal workspace is the fallback).
+    workspace_id: Optional[str] = Field(default=None, index=True)
+    # Routing context sampled at first event — kept for display ("this session
+    # ran in ~/work/acme-app on main") and re-routing when rules change.
+    cwd: Optional[str] = Field(default=None)
+    git_remote: Optional[str] = Field(default=None, index=True)
+    git_branch: Optional[str] = Field(default=None)
 
 
 class Event(SQLModel, table=True):
@@ -57,19 +78,83 @@ class Event(SQLModel, table=True):
     cost_usd: float = 0.0
     flags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     raw: Optional[dict] = Field(default=None, sa_column=Column(JSON))
+    # Routing context per event (Phase C) — hook includes these so the
+    # server can (a) route the session to the right org at first event and
+    # (b) detect when cwd changes within a session (e.g. user ran `cd`).
+    cwd: Optional[str] = Field(default=None)
+    git_remote: Optional[str] = Field(default=None)
+    git_branch: Optional[str] = Field(default=None)
 
 
-class HookToken(SQLModel, table=True):
-    """Opaque hook-token minted for the Claude Code hook (CLI-V0-DESIGN §5.1)."""
-    __tablename__ = "hook_tokens"
+class CliToken(SQLModel, table=True):
+    """Opaque token for the Receipt CLI hook. Two flavors live in the same
+    table (Phase B):
+
+      - `token_type='user'` — minted by device-code pairing, `user` holds the
+        minter's email, `org_id` is NULL. Dies if the human leaves all orgs.
+      - `token_type='service'` — minted by an org admin from the dashboard,
+        `org_id` is set and `user` is a synthetic marker; `minted_by_user_id`
+        records the human admin who created it. Survives user departures —
+        intended for CI/server/fleet deployments.
+
+    Event scope is NOT stored on the token. It is resolved server-side at
+    ingest via `route_rules` in Supabase.
+    """
+    __tablename__ = "cli_tokens"
 
     id: str = Field(primary_key=True)
     user: str = Field(index=True)
     token_hash: str = Field(index=True, unique=True)
+    token_type: str = Field(default="user", index=True)  # 'user' | 'service'
+    workspace_id: Optional[str] = Field(default=None, index=True)  # set if service — target workspace for fleet tokens
+    minted_by_user_id: Optional[str] = Field(default=None)  # audit trail
+    machine_hostname: Optional[str] = Field(default=None, max_length=256)
     label: Optional[str] = Field(default=None, max_length=128)
+    scopes: Optional[str] = Field(default=None)  # JSON: ['events:write', ...]
     created_at: datetime = Field(default_factory=_utcnow)
     last_used_at: Optional[datetime] = None
     revoked_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+
+# Back-compat alias so existing call sites (deps, auth_router) keep working
+# during the Phase B rollout. New code should import CliToken.
+HookToken = CliToken
+
+
+class DeviceAuthorization(SQLModel, table=True):
+    """OAuth-2-style device-code pairing row (RFC 8628 simplified).
+
+    Lifecycle:
+      1. CLI calls POST /auth/device-code (unauth) → row created with
+         status='pending', user=NULL, token_hash=NULL.
+      2. User opens /cli/pair in an authenticated browser, enters `user_code`,
+         confirms. Frontend calls POST /auth/device-code/approve → row flips
+         to status='approved', user is set, a `rcpt_*` hook-token is minted
+         and its hash stored in this row.
+      3. CLI polls POST /auth/device-code/poll with the raw `device_code`.
+         First 'approved' poll returns the raw token and transitions row to
+         status='consumed' (token is read-once; subsequent polls get 'denied').
+
+    `device_code` is the long random secret the CLI holds; only its sha256 is
+    stored. `user_code` is the short human-type code (e.g. ABCD-EFGH) shown on
+    the CLI and typed by the user in the browser; stored in clear so approve
+    can look it up.
+    """
+    __tablename__ = "device_authorizations"
+
+    id: str = Field(primary_key=True)
+    device_code_hash: str = Field(index=True, unique=True)
+    user_code: str = Field(index=True, unique=True, max_length=16)
+    status: str = Field(default="pending", index=True)  # pending|approved|consumed|expired|denied
+    user: Optional[str] = Field(default=None, index=True)
+    token_hash: Optional[str] = None  # sha256 of the hook_token, for audit only
+    label: Optional[str] = Field(default=None, max_length=128)
+    created_at: datetime = Field(default_factory=_utcnow)
+    expires_at: datetime = Field(index=True)
+    approved_at: Optional[datetime] = None
+    consumed_at: Optional[datetime] = None
+    last_polled_at: Optional[datetime] = None
 
 
 class User(SQLModel, table=True):
@@ -132,6 +217,13 @@ class EventIn(SQLModel):
     tokens_output: int = 0
     cost_usd: float = 0.0
     raw: Optional[dict] = None
+    # Phase C — routing context. `cwd` comes from the Claude Code hook
+    # payload; `git_remote` / `git_branch` are populated by the receipt.sh
+    # hook from `git -C "$cwd"`, cached per session. When present, the
+    # server uses them on first event to resolve the session's target org.
+    cwd: Optional[str] = None
+    git_remote: Optional[str] = None
+    git_branch: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -167,6 +259,8 @@ class SessionListItem(SQLModel):
     cost_usd: float
     flagged: bool
     flags: list[str]
+    title: Optional[str] = None
+    workspace_id: Optional[str] = None
 
 
 class SessionListResponse(SQLModel):
@@ -194,13 +288,40 @@ class EventOut(SQLModel):
     group_key: Optional[str] = None
     # Truncated tool_response preview for the timeline (stdout + stderr + error).
     output: Optional[str] = None
+    # Structured tool_input (capped) so the frontend can render per-tool detail
+    # views (diff for Edit, command block for Bash, todo list for TodoWrite).
+    # Size-capped at serialization to keep the detail response bounded.
+    tool_input: Optional[dict] = None
+
+
+class FileChangedOut(SQLModel):
+    """Structured file-change entry for SessionDetail.files_changed.
+
+    Computed at serialization time from Event rows — not persisted. Frontend
+    (SessionDetailPage FileChangedRail + marketing SampleReceipt) shows path +
+    op chip + additions/deletions counts.
+    """
+    path: str
+    op: str  # "create" | "edit" | "delete"
+    additions: int
+    deletions: int
+
+
+class ScoreBreakdown(SQLModel):
+    overall: int
+    throughput: int
+    reliability: int
+    safety: int
+    grade: str
+    breakdown: dict
 
 
 class SessionDetail(SessionListItem):
-    files_changed: list[str]
+    files_changed: list[FileChangedOut]
     tools_called: list[str]
     summary: Optional[str]
     events: list[EventOut]
+    score: Optional[ScoreBreakdown] = None
 
 
 # ---------- Trail export (§4.6) ----------
@@ -243,9 +364,67 @@ class HookTokenMintOut(SQLModel):
 class HookTokenListItem(SQLModel):
     id: str
     label: Optional[str]
+    token_type: Optional[str] = None
+    machine_hostname: Optional[str] = None
     created_at: datetime
     last_used_at: Optional[datetime]
     revoked_at: Optional[datetime]
+
+
+# ---------- Device-code pairing (receipt init) ----------
+
+class DeviceCodeStartIn(SQLModel):
+    label: Optional[str] = Field(default=None, max_length=128)
+
+
+class DeviceCodeStartOut(SQLModel):
+    device_code: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    expires_in: int
+    interval: int
+
+
+class DeviceCodePollIn(SQLModel):
+    device_code: str = Field(min_length=1)
+
+
+class DeviceCodePollOut(SQLModel):
+    status: str  # pending|approved|expired|denied
+    token: Optional[str] = None
+
+
+class DeviceCodeApproveIn(SQLModel):
+    user_code: str = Field(min_length=1, max_length=16)
+
+
+# ---------- Service tokens (Phase B) ----------
+
+class ServiceTokenCreateIn(SQLModel):
+    org_id: str = Field(min_length=1)
+    label: str = Field(min_length=1, max_length=128)
+    scopes: Optional[list[str]] = Field(default=None)
+
+
+class ServiceTokenCreateOut(SQLModel):
+    token: str
+    id: str
+    org_id: str
+    label: str
+    created_at: datetime
+
+
+class ServiceTokenListItem(SQLModel):
+    id: str
+    org_id: str
+    label: Optional[str]
+    machine_hostname: Optional[str]
+    scopes: Optional[list[str]]
+    created_at: datetime
+    last_used_at: Optional[datetime]
+    revoked_at: Optional[datetime]
+    minted_by_user_id: Optional[str]
 
 
 # ---------- Password reset (wave-14 C4) ----------

@@ -21,6 +21,8 @@ const FIXTURES: Session[] = [
     cost_usd: 0.84,
     flag_count: 2,
     flags: ["secret-pattern", "env-mutation"],
+    tokens_input: 0,
+    tokens_output: 0,
   },
   {
     id: "s_02",
@@ -32,6 +34,8 @@ const FIXTURES: Session[] = [
     cost_usd: 2.14,
     flag_count: 1,
     flags: ["migration-edit"],
+    tokens_input: 0,
+    tokens_output: 0,
   },
   {
     id: "s_03",
@@ -43,6 +47,8 @@ const FIXTURES: Session[] = [
     cost_usd: 0.41,
     flag_count: 0,
     flags: [],
+    tokens_input: 0,
+    tokens_output: 0,
   },
   {
     id: "s_04",
@@ -54,6 +60,8 @@ const FIXTURES: Session[] = [
     cost_usd: 0.12,
     flag_count: 0,
     flags: [],
+    tokens_input: 0,
+    tokens_output: 0,
   },
   {
     id: "s_05",
@@ -64,7 +72,9 @@ const FIXTURES: Session[] = [
     tool_count: 201,
     cost_usd: 3.72,
     flag_count: 3,
-    flags: ["shell-rm", "ci-config-edit", "migration-edit"],
+    flags: ["shell-destructive", "ci-config-edit", "migration-edit"],
+    tokens_input: 0,
+    tokens_output: 0,
   },
   {
     id: "s_06",
@@ -76,6 +86,8 @@ const FIXTURES: Session[] = [
     cost_usd: 0.18,
     flag_count: 0,
     flags: [],
+    tokens_input: 0,
+    tokens_output: 0,
   },
   {
     id: "s_07",
@@ -87,6 +99,8 @@ const FIXTURES: Session[] = [
     cost_usd: 0.63,
     flag_count: 1,
     flags: ["ci-config-edit"],
+    tokens_input: 0,
+    tokens_output: 0,
   },
   {
     id: "s_08",
@@ -98,6 +112,8 @@ const FIXTURES: Session[] = [
     cost_usd: 0.28,
     flag_count: 0,
     flags: [],
+    tokens_input: 0,
+    tokens_output: 0,
   },
 ]
 
@@ -114,7 +130,7 @@ const EVENTS_BY_SESSION: Record<string, SessionEvent[]> = {
   ],
   s_05: [
     { id: "f1", session_id: "s_05", at: iso(26 * 3600_000), type: "message", text: "Cleaning up old migrations + deploy." },
-    { id: "f2", session_id: "s_05", at: iso(26 * 3600_000 - 2 * 60_000), type: "tool_call", tool_name: "Bash", tool_input: { cmd: "rm -rf migrations/old" }, flag: "shell-rm" },
+    { id: "f2", session_id: "s_05", at: iso(26 * 3600_000 - 2 * 60_000), type: "tool_call", tool_name: "Bash", tool_input: { cmd: "rm -rf migrations/old" }, flag: "shell-destructive" },
     { id: "f3", session_id: "s_05", at: iso(26 * 3600_000 - 10 * 60_000), type: "file_change", file_path: "migrations/006_add_sessions.py", file_op: "create", flag: "migration-edit" },
     { id: "f4", session_id: "s_05", at: iso(26 * 3600_000 - 20 * 60_000), type: "file_change", file_path: ".github/workflows/deploy.yml", file_op: "edit", flag: "ci-config-edit" },
     { id: "f5", session_id: "s_05", at: iso(26 * 3600_000 - 44 * 60_000), type: "message", text: "Shipped." },
