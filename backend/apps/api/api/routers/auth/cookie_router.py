@@ -77,6 +77,17 @@ def _cookie_samesite() -> str:
     return os.getenv("COOKIE_SAMESITE", "lax")
 
 
+def _cookie_domain() -> str | None:
+    """Parent-domain cookies so app.yoru.sh + api.yoru.sh share them.
+
+    When unset (local dev), returns None → browser scopes cookie to the
+    current host. In prod we set COOKIE_DOMAIN=.yoru.sh so JS on app.yoru.sh
+    can read the rcpt_csrf cookie that api.yoru.sh emitted (required by the
+    double-submit CSRF check)."""
+    v = os.getenv("COOKIE_DOMAIN", "").strip()
+    return v or None
+
+
 class RefreshCookiePayload(BaseModel):
     """Only used by the service shim — the refresh router reads the cookie."""
     refresh_token: str
@@ -99,6 +110,7 @@ def _set_session_cookies(response: Response, access: str, refresh: str) -> str:
     csrf = secrets.token_urlsafe(32)
     secure = _cookie_secure()
     samesite = _cookie_samesite()
+    domain = _cookie_domain()
 
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -108,6 +120,7 @@ def _set_session_cookies(response: Response, access: str, refresh: str) -> str:
         httponly=True,
         secure=secure,
         samesite=samesite,
+        domain=domain,
     )
     response.set_cookie(
         key=REFRESH_COOKIE_NAME,
@@ -117,6 +130,7 @@ def _set_session_cookies(response: Response, access: str, refresh: str) -> str:
         httponly=True,
         secure=secure,
         samesite=samesite,
+        domain=domain,
     )
     response.set_cookie(
         key=CSRF_COOKIE_NAME,
@@ -126,17 +140,19 @@ def _set_session_cookies(response: Response, access: str, refresh: str) -> str:
         httponly=False,  # readable from JS, that's the double-submit pattern
         secure=secure,
         samesite=samesite,
+        domain=domain,
     )
     return csrf
 
 
 def _clear_session_cookies(response: Response) -> None:
+    domain = _cookie_domain()
     for name, path in (
         (SESSION_COOKIE_NAME, _ACCESS_PATH),
         (REFRESH_COOKIE_NAME, _REFRESH_PATH),
         (CSRF_COOKIE_NAME, _CSRF_PATH),
     ):
-        response.delete_cookie(key=name, path=path)
+        response.delete_cookie(key=name, path=path, domain=domain)
 
 
 class CookieAuthRouter:
