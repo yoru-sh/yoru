@@ -72,3 +72,7 @@ class SubscriptionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     features: dict[str, Any]
+    # Set once the user completes a Stripe Checkout. When NULL, the
+    # Customer Portal isn't reachable — the UI should hide the "Manage"
+    # button and the /billing/portal-session endpoint returns 404.
+    stripe_customer_id: str | None = None

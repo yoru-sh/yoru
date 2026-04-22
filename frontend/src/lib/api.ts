@@ -1,4 +1,3 @@
-import { supabase } from "./supabase"
 import type {
   Filters,
   SessionDetail,
@@ -19,7 +18,7 @@ export class ApiError extends Error {
 
 // Billing plan lives here (not further down) because the 402 interceptor
 // below must prime the shared ['orgs','me'] cache shape.
-export type Plan = "free" | "team" | "org"
+export type Plan = "free" | "pro" | "team" | "org"
 
 // Shared cache shape for ['orgs','me'] — single source of truth for the
 // authenticated org's plan + quota state (US-V4-1 AC #6). Siblings
@@ -33,57 +32,41 @@ export const ORGS_ME_KEY = ["orgs", "me"] as const
 
 let tokenExpiredHandled = false
 
-const HOOK_TOKEN_KEY = "receipt.hook_token"
-const HOOK_TOKEN_USER_KEY = "receipt.hook_token_user"
-
-// Backend v0 accepts only `rcpt_*` tokens, not Supabase JWTs. Bridge: on first
-// authenticated call, mint a rcpt_ via the unauthenticated POST /auth/hook-token
-// endpoint (CLI-V0-DESIGN §5.1) and cache per-user in localStorage.
-async function getHookToken(userEmail: string): Promise<string | null> {
-  const cachedUser = localStorage.getItem(HOOK_TOKEN_USER_KEY)
-  const cachedToken = localStorage.getItem(HOOK_TOKEN_KEY)
-  if (cachedUser === userEmail && cachedToken) return cachedToken
-  try {
-    const res = await fetch(`${API_BASE}/auth/hook-token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user: userEmail, label: "web" }),
-    })
-    if (!res.ok) return null
-    const body = (await res.json()) as { token?: string }
-    if (!body.token) return null
-    localStorage.setItem(HOOK_TOKEN_KEY, body.token)
-    localStorage.setItem(HOOK_TOKEN_USER_KEY, userEmail)
-    return body.token
-  } catch {
-    return null
-  }
+// Cookie-based auth. The browser auto-attaches `rcpt_session` (HttpOnly) on
+// every request thanks to `credentials: 'include'`. For mutating methods we
+// echo the `rcpt_csrf` cookie (readable) as `X-CSRF-Token` — double-submit
+// CSRF protection per backend/apps/api/api/middleware/csrf.py.
+function readCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`))
+  return match ? decodeURIComponent(match[1]) : null
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const { data } = await supabase.auth.getSession()
-  const wasAuthenticated = !!data.session
+  const method = (init?.method ?? "GET").toUpperCase()
   const headers = new Headers(init?.headers)
-  if (data.session) {
-    const email = data.session.user?.email
-    const hookToken = email ? await getHookToken(email) : null
-    if (hookToken) headers.set("Authorization", `Bearer ${hookToken}`)
-    else headers.set("Authorization", `Bearer ${data.session.access_token}`)
+  if (!headers.has("Content-Type") && init?.body) {
+    headers.set("Content-Type", "application/json")
   }
-  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json")
+  const mutating = method !== "GET" && method !== "HEAD" && method !== "OPTIONS"
+  if (mutating) {
+    const csrf = readCookie("rcpt_csrf")
+    if (csrf) headers.set("X-CSRF-Token", csrf)
+  }
 
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers })
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    method,
+    headers,
+    credentials: "include",
+  })
   const text = await res.text()
   if (!res.ok) {
-    if (res.status === 401 && wasAuthenticated && !tokenExpiredHandled) {
-      // Invalidate cached hook token — next call will mint a fresh one before
-      // the signOut loop. If it still 401s, fall through to the signout path.
-      localStorage.removeItem(HOOK_TOKEN_KEY)
-      localStorage.removeItem(HOOK_TOKEN_USER_KEY)
+    if (res.status === 401 && !tokenExpiredHandled) {
+      // Cookie expired or invalid — bounce to signin. The backend already
+      // rotates refresh automatically; if we're still 401 here, refresh also
+      // failed and the user must re-authenticate.
       tokenExpiredHandled = true
-      void supabase.auth.signOut().finally(() => {
-        window.location.assign("/signin?reason=token-expired")
-      })
+      window.location.assign("/signin?reason=token-expired")
     }
     if (res.status === 402) {
       // Quota paywall — prime the ['orgs','me'] cache so <UpgradeBanner/>
@@ -106,6 +89,7 @@ function qs(f: Filters): string {
   if (f.date_to) p.set("to_ts", f.date_to)
   if (f.flag_only) p.set("flagged", "true")
   if (f.min_cost !== undefined) p.set("min_cost", String(f.min_cost))
+  if (f.workspace_id) p.set("workspace_id", f.workspace_id)
   return p.toString()
 }
 
@@ -118,13 +102,60 @@ interface RawSession {
   ended_at: string | null
   tools_count: number
   cost_usd: number
+  tokens_input?: number
+  tokens_output?: number
   flags: string[]
+  title?: string | null
+  workspace_id?: string | null
+}
+
+// Backend rule_id (snake_case, per red_flags.py) → frontend RedFlagKind (kebab).
+// Secrets collapse into one user-facing category since the sub-flavour
+// (aws/stripe/github/…) is an implementation detail of the scanner. Shell
+// rules (rm / pipe-to-shell / git --force / reset --hard) collapse into one
+// "destructive" bucket so the backend can grow the family without a frontend
+// deploy. Unknown ids are filtered out (we never render broken badges) but
+// we warn in the console so frontend drift after a backend rule addition is
+// visible during development — see conversation on 2026-04-22.
+const WARNED_UNKNOWN = new Set<string>()
+function normalizeFlag(rule: string): import("../types/receipt").RedFlagKind | null {
+  if (rule.startsWith("secret_")) return "secret-pattern"
+  switch (rule) {
+    case "shell_rm":
+    case "shell_pipe_to_shell":
+    case "shell_git_force":
+      return "shell-destructive"
+    case "db_destructive": return "db-destructive"
+    case "migration_file": return "migration-edit"
+    case "env_mutation":   return "env-mutation"
+    case "ci_config":      return "ci-config-edit"
+    default:
+      if (!WARNED_UNKNOWN.has(rule)) {
+        WARNED_UNKNOWN.add(rule)
+        console.warn(`[red-flag] unknown backend rule_id %o — dropped from UI. Update normalizeFlag in lib/api.ts.`, rule)
+      }
+      return null
+  }
+}
+
+function normalizeFlags(rules: string[] | undefined): import("../types/receipt").RedFlagKind[] {
+  const out: import("../types/receipt").RedFlagKind[] = []
+  const seen = new Set<string>()
+  for (const r of rules ?? []) {
+    const k = normalizeFlag(r)
+    if (k && !seen.has(k)) {
+      seen.add(k)
+      out.push(k)
+    }
+  }
+  return out
 }
 
 function mapSession(r: RawSession): import("../types/receipt").Session {
   const start = Date.parse(r.started_at)
   const end = r.ended_at ? Date.parse(r.ended_at) : null
   const duration_ms = end && !isNaN(start) && !isNaN(end) ? end - start : 0
+  const flags = normalizeFlags(r.flags)
   return {
     id: r.id,
     user_email: r.user,
@@ -133,8 +164,12 @@ function mapSession(r: RawSession): import("../types/receipt").Session {
     duration_ms,
     tool_count: r.tools_count ?? 0,
     cost_usd: r.cost_usd ?? 0,
-    flag_count: r.flags?.length ?? 0,
-    flags: (r.flags ?? []) as import("../types/receipt").RedFlagKind[],
+    tokens_input: r.tokens_input ?? 0,
+    tokens_output: r.tokens_output ?? 0,
+    flag_count: flags.length,
+    flags,
+    title: r.title ?? null,
+    workspace_id: r.workspace_id ?? null,
   }
 }
 
@@ -171,6 +206,13 @@ interface RawEvent {
   content?: string | null
   output?: string | null
   flags?: string[]
+  duration_ms?: number | null
+  group_key?: string | null
+  tool_input?: Record<string, unknown> | null
+  cost_usd?: number | null
+  tokens_input?: number | null
+  tokens_output?: number | null
+  raw?: Record<string, unknown> | null
 }
 
 interface RawSessionDetail extends RawSession {
@@ -178,6 +220,7 @@ interface RawSessionDetail extends RawSession {
   files_changed?: Array<{ path: string; op: string; additions?: number; deletions?: number }>
   summary?: string | null
   tools_called?: string[]
+  score?: import("../types/receipt").SessionScore | null
 }
 
 function mapEventType(kind: string): import("../types/receipt").EventType {
@@ -200,21 +243,81 @@ export async function getSession(id: string): Promise<SessionDetail> {
   const base = mapSession(raw)
   return {
     ...base,
+    // Split the raw event stream into timeline + usage channels.
+    // Usage (kind=token) events power the rail TokenPanel + Hero sparkline;
+    // keeping them out of the visible timeline avoids polluting the
+    // conversation flow with per-call token readouts.
+    usage_events: (raw.events ?? [])
+      .filter((e) => e.kind === "token")
+      .map((e) => {
+        // Backend puts the full usage breakdown (input_tokens, cache_read,
+        // cache_creation, output_tokens, etc) under `tool_input` via the
+        // tailer's raw.tool_input path. `raw` itself isn't exposed by
+        // EventOut, so we rely on tool_input being populated.
+        const ti = (e.tool_input ?? {}) as Record<string, unknown>
+        const model =
+          typeof ti["model"] === "string"
+            ? (ti["model"] as string)
+            : (typeof e.tool === "string" ? e.tool : undefined)
+        return {
+          id: String(e.id),
+          session_id: raw.id,
+          at: e.ts,
+          type: "message" as const,
+          tool: "usage",
+          tool_name: model ?? "usage",
+          content: e.content ?? undefined,
+          tokens_input: e.tokens_input ?? undefined,
+          tokens_output: e.tokens_output ?? undefined,
+          cost_usd: e.cost_usd ?? undefined,
+          tool_input: ti,
+        }
+      }),
     events: (raw.events ?? [])
-      // Filter out session_start/session_end — they are frame markers,
-      // not user-visible timeline events.
-      .filter((e) => e.kind !== "session_start" && e.kind !== "session_end")
-      .map((e) => ({
-        id: String(e.id),
-        session_id: raw.id,
-        at: e.ts,
-        type: mapEventType(e.kind),
-        tool_name: e.tool ?? undefined,
-        file_path: e.path ?? undefined,
-        text: e.content ?? undefined,
-        output: e.output ?? undefined,
-        flag: (e.flags && e.flags[0]) as import("../types/receipt").RedFlagKind | undefined,
-      })),
+      // Filter out session_start/session_end (frame markers) and kind=token
+      // (usage accounting — rolled up into the Hero cost sparkline + the
+      // rail TokenPanel, never shown inline in the timeline flow).
+      .filter(
+        (e) =>
+          e.kind !== "session_start" &&
+          e.kind !== "session_end" &&
+          e.kind !== "token",
+      )
+      .map((e) => {
+        const type = mapEventType(e.kind)
+        const tool = e.tool ?? undefined
+        const path = e.path ?? undefined
+        const content = e.content ?? undefined
+        const base: import("../types/receipt").SessionEvent = {
+          id: String(e.id),
+          session_id: raw.id,
+          at: e.ts,
+          type,
+          tool,
+          tool_name: tool,
+          path,
+          file_path: path,
+          content,
+          output: e.output ?? undefined,
+          duration_ms: e.duration_ms ?? undefined,
+          group_key: e.group_key ?? undefined,
+          tool_input: e.tool_input ?? undefined,
+          cost_usd: e.cost_usd ?? undefined,
+          tokens_input: e.tokens_input ?? undefined,
+          tokens_output: e.tokens_output ?? undefined,
+          flag: normalizeFlags(e.flags)[0],
+          flags: normalizeFlags(e.flags),
+        }
+        // Route `content` into the type-specific field so timeline renderers
+        // (which read error_message / text / content per kind) each see their payload.
+        if (type === "error") base.error_message = content
+        else if (type === "message") base.text = content
+        if (type === "file_change" && tool) {
+          // Backend doesn't persist file_op yet — infer from tool name.
+          base.file_op = tool === "Write" ? "create" : "edit"
+        }
+        return base
+      }),
     files_changed: (raw.files_changed ?? []).map((f) => ({
       path: f.path,
       op: (f.op ?? "edit") as import("../types/receipt").FileOp,
@@ -222,7 +325,33 @@ export async function getSession(id: string): Promise<SessionDetail> {
       deletions: f.deletions ?? 0,
     })),
     summary: raw.summary ?? null,
+    score: raw.score ?? null,
   }
+}
+
+/**
+ * Download the full audit trail for a session as a JSON Blob. Bypasses the
+ * apiFetch JSON-parse path because we want the browser to trigger a file
+ * download via a synthetic <a download>. The backend route sets the
+ * Content-Disposition header with `receipt-<id>.json`.
+ */
+export async function exportSessionTrail(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/trail`, {
+    credentials: "include",
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new ApiError(res.status, body || `Export failed (${res.status})`)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = `receipt-${id}.json`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 export async function postSummary(id: string): Promise<Summary> {
@@ -241,6 +370,7 @@ export async function getSummary(id: string): Promise<Summary> {
 
 export interface CheckoutRequest {
   plan: Plan
+  seats?: number
   success_url: string
   cancel_url: string
 }
@@ -250,9 +380,15 @@ export interface CheckoutResponse {
   session_id: string
 }
 
-export async function postCheckoutSession(plan: Plan): Promise<CheckoutResponse> {
-  const body: CheckoutRequest = {
+export async function postCheckoutSession(
+  plan: Plan,
+  seats: number = 1,
+  cycle: "monthly" | "annual" = "monthly",
+): Promise<CheckoutResponse> {
+  const body = {
     plan,
+    cycle,
+    seats,
     success_url: window.location.origin + "/settings/billing?upgraded=1",
     cancel_url: window.location.href,
   }
@@ -267,3 +403,300 @@ export async function postCheckoutSession(plan: Plan): Promise<CheckoutResponse>
     body: JSON.stringify(body),
   })
 }
+
+export interface PortalSessionResponse {
+  portal_url: string
+}
+
+export type PortalTargetPlan = "pro" | "team" | "cancel"
+export type PortalTargetCycle = "monthly" | "annual"
+
+export async function postPortalSession(
+  returnUrl: string = `${window.location.origin}/settings/billing`,
+  targetPlan?: PortalTargetPlan,
+  targetCycle: PortalTargetCycle = "monthly",
+): Promise<PortalSessionResponse> {
+  const body: Record<string, unknown> = { return_url: returnUrl }
+  if (targetPlan) {
+    body.target_plan = targetPlan
+    body.target_cycle = targetCycle
+  }
+  return apiFetch<PortalSessionResponse>("/billing/portal-session", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+// ───── CLI tokens (Phase E) ─────
+
+export interface UserTokenItem {
+  id: string
+  label?: string | null
+  token_type?: string | null
+  machine_hostname?: string | null
+  created_at: string
+  last_used_at?: string | null
+  revoked_at?: string | null
+}
+
+export interface ServiceTokenItem {
+  id: string
+  org_id: string
+  label?: string | null
+  machine_hostname?: string | null
+  scopes?: string[] | null
+  created_at: string
+  last_used_at?: string | null
+  revoked_at?: string | null
+  minted_by_user_id?: string | null
+}
+
+export interface ServiceTokenCreated {
+  token: string
+  id: string
+  org_id: string
+  label: string
+  created_at: string
+}
+
+export async function listMyTokens(): Promise<UserTokenItem[]> {
+  return apiFetch<UserTokenItem[]>("/auth/hook-tokens")
+}
+
+export async function revokeMyToken(id: string): Promise<void> {
+  await apiFetch<void>(`/auth/hook-token/${id}`, { method: "DELETE" })
+}
+
+export async function listServiceTokens(orgId: string): Promise<ServiceTokenItem[]> {
+  return apiFetch<ServiceTokenItem[]>(
+    `/auth/service-tokens?org_id=${encodeURIComponent(orgId)}`,
+  )
+}
+
+export async function createServiceToken(
+  orgId: string,
+  label: string,
+): Promise<ServiceTokenCreated> {
+  return apiFetch<ServiceTokenCreated>("/auth/service-token", {
+    method: "POST",
+    body: JSON.stringify({ org_id: orgId, label }),
+  })
+}
+
+export async function revokeServiceToken(id: string): Promise<void> {
+  await apiFetch<void>(`/auth/service-token/${id}`, { method: "DELETE" })
+}
+
+// ───── Workspaces (Phase W2) ─────
+
+export interface Workspace {
+  id: string
+  name: string
+  slug: string
+  org_id: string | null
+  owner_user_id: string
+  settings: Record<string, unknown>
+  created_at: string
+  updated_at: string
+}
+
+export async function listWorkspaces(): Promise<Workspace[]> {
+  return apiFetch<Workspace[]>("/me/workspaces")
+}
+
+export interface WorkspaceRepo {
+  id: string
+  workspace_id: string
+  host: string
+  owner: string
+  repo: string
+  full_name: string
+  created_at: string
+}
+
+export async function listWorkspaceRepos(workspaceId: string): Promise<WorkspaceRepo[]> {
+  return apiFetch<WorkspaceRepo[]>(`/me/workspaces/${workspaceId}/repos`)
+}
+
+export async function addWorkspaceRepo(
+  workspaceId: string,
+  body: { host: string; owner: string; repo: string },
+): Promise<WorkspaceRepo> {
+  return apiFetch<WorkspaceRepo>(`/me/workspaces/${workspaceId}/repos`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export async function removeWorkspaceRepo(
+  workspaceId: string,
+  repoId: string,
+): Promise<void> {
+  await apiFetch<void>(`/me/workspaces/${workspaceId}/repos/${repoId}`, {
+    method: "DELETE",
+  })
+}
+
+export interface WorkspaceCreate {
+  name: string
+  slug?: string
+  org_id?: string | null
+}
+
+export async function createWorkspace(body: WorkspaceCreate): Promise<Workspace> {
+  return apiFetch<Workspace>("/me/workspaces", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export async function patchWorkspace(
+  id: string,
+  body: { name?: string; settings?: Record<string, unknown> },
+): Promise<Workspace> {
+  return apiFetch<Workspace>(`/me/workspaces/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteWorkspace(id: string): Promise<void> {
+  await apiFetch<void>(`/me/workspaces/${id}`, { method: "DELETE" })
+}
+
+export async function promoteWorkspace(
+  id: string,
+  body: { org_name: string; org_slug?: string },
+): Promise<{ organization: { id: string; name: string }; workspace: Workspace }> {
+  return apiFetch(`/me/workspaces/${id}/promote`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+// ───── GitHub integration (Phase W3) ─────
+
+export interface GithubStatus {
+  connected: boolean
+  github_login?: string | null
+  connected_at?: string | null
+  expires_at?: string | null
+}
+
+export interface GithubRepo {
+  id: number
+  full_name: string
+  owner: string
+  repo: string
+  host: string
+  private: boolean
+  updated_at?: string | null
+  mapped_workspace_id?: string | null
+}
+
+export async function getGithubStatus(): Promise<GithubStatus> {
+  return apiFetch<GithubStatus>("/me/github")
+}
+
+export async function connectGithub(body: {
+  provider_token: string
+  scopes?: string[]
+}): Promise<GithubStatus> {
+  return apiFetch<GithubStatus>("/me/github/connect", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export async function disconnectGithub(): Promise<void> {
+  await apiFetch<void>("/me/github", { method: "DELETE" })
+}
+
+export async function listGithubRepos(
+  page: number = 1,
+  per_page: number = 100,
+): Promise<GithubRepo[]> {
+  return apiFetch<GithubRepo[]>(
+    `/me/github/repos?page=${page}&per_page=${per_page}`,
+  )
+}
+
+export async function autoRouteRepos(body: {
+  workspace_id: string
+  repos: string[]
+}): Promise<{ added: number; skipped_already_mapped: number; errors: number }> {
+  return apiFetch("/me/github/auto-route", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export function buildGithubAuthUrl(redirectTo: string, scopes: string[] = ["read:user", "repo"]): string {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined
+  if (!supabaseUrl) throw new Error("VITE_SUPABASE_URL not set")
+  const u = new URL(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/authorize`)
+  u.searchParams.set("provider", "github")
+  u.searchParams.set("redirect_to", redirectTo)
+  u.searchParams.set("scopes", scopes.join(" "))
+  return u.toString()
+}
+
+// ───── Routing rules (Phase D-lite) ─────
+
+export interface RouteRule {
+  id: string
+  user_id?: string | null
+  org_id?: string | null
+  scope: "user" | "org"
+  priority: number
+  match_type: "git_remote" | "cwd"
+  match_pattern: string
+  target_org_id?: string | null
+  enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface RouteRuleCreate {
+  match_type: "git_remote" | "cwd"
+  match_pattern: string
+  target_org_id?: string | null
+  priority?: number
+  enabled?: boolean
+}
+
+export async function listRouteRules(): Promise<RouteRule[]> {
+  return apiFetch<RouteRule[]>("/me/route-rules")
+}
+
+export async function createRouteRule(body: RouteRuleCreate): Promise<RouteRule> {
+  return apiFetch<RouteRule>("/me/route-rules", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteRouteRule(id: string): Promise<void> {
+  await apiFetch<void>(`/me/route-rules/${id}`, { method: "DELETE" })
+}
+
+/**
+ * Default auto-route patterns for a newly-created or newly-joined org.
+ * git_remote + cwd rules let the hook route repos + bare directories.
+ * Caller typically shows these in a confirm dialog before inserting.
+ */
+export function defaultAutoRoutePatterns(orgSlug: string): RouteRuleCreate[] {
+  return [
+    {
+      match_type: "git_remote",
+      match_pattern: `*${orgSlug}/*`,
+      priority: 50,
+    },
+    {
+      match_type: "cwd",
+      match_pattern: `*/${orgSlug}/*`,
+      priority: 60,
+    },
+  ]
+}
+

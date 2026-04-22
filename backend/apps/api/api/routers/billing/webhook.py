@@ -1,51 +1,75 @@
-"""Polar billing webhook handler with HMAC verify + event idempotency.
+"""Stripe billing webhook — signature verify + Supabase subscription upsert.
 
-Contract: wave-20-C C1 task brief. BILLING-WEBHOOK-SECURITY.md describes a
-Stripe-format `t=<ts>,v1=<hex>` scheme; this v0 follows the simpler direct-hex
-scheme mandated by the brief (`X-Polar-Signature: <hex-sha256>`).
+Stripe POSTs events to `/api/v1/billing/webhook` with header
+`Stripe-Signature: t=<ts>,v1=<hex>`. The stripe SDK's
+`Webhook.construct_event()` handles verify + parse; on success we call
+the `set_user_subscription_from_polar` / `cancel_user_subscription_from_polar`
+RPCs on Supabase (names kept for migration-history stability — they're
+provider-agnostic underneath).
 
 Flow:
-  1. `POLAR_WEBHOOK_SECRET` unset → 503.
-  2. Read raw body + X-Polar-Signature; verify via hmac.compare_digest. Any
-     mismatch or missing header → 400 (logged as `signature_mismatch`).
-  3. Parse JSON AFTER signature passes. Extract `id`, `type`, `data`.
-  4. Handled types only: checkout.completed | subscription.updated |
-     subscription.cancelled. Unknown → 200 no-op, no DB mutation.
-  5. Idempotency: PK-hit on `billing_events.event_id` → 200 short-circuit.
-  6. Apply org mutation + INSERT billing_events row in one transaction.
+  1. `STRIPE_WEBHOOK_SECRET` unset → 503.
+  2. `construct_event` verifies signature + parses envelope.
+  3. Handled types: checkout.session.completed | customer.subscription.created
+     | customer.subscription.updated | customer.subscription.deleted.
+     Unknown → 200 no-op.
+  4. Idempotency: PK-hit on `billing_events.event_id` (SQLite ledger) →
+     200 short-circuit.
+  5. Apply Supabase mutation via RPC + INSERT billing_events row.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Optional
+from uuid import UUID
 
+import httpx
+import stripe
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlmodel import Session as DBSession
 
 from apps.api.api.routers.receipt.db import engine
 from apps.api.api.routers.receipt.deps import _naive_utc_now
 
-from .models import BillingEvent, Org
+from .models import BillingEvent
 
 _logger = logging.getLogger(__name__)
 
-_SIGNATURE_HEADER = "x-polar-signature"  # Starlette lowercases header keys
-_VALID_PLANS = {"team", "org"}
+_VALID_PLANS = {"pro", "team", "org"}
 _HANDLED_TYPES = {
-    "checkout.completed",
-    "subscription.created",
-    "subscription.updated",
-    "subscription.cancelled",
+    "checkout.session.completed",
+    "customer.subscription.created",
+    "customer.subscription.updated",
+    "customer.subscription.deleted",
 }
+
+_SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+_SUPABASE_ANON = os.environ.get("SUPABASE_ANON_KEY", "")
+
+
+def _call_supabase_rpc(fn: str, args: dict[str, Any]) -> None:
+    """Fire a SECURITY DEFINER RPC on Supabase. Raises on non-2xx."""
+    if not _SUPABASE_URL or not _SUPABASE_ANON:
+        raise RuntimeError("SUPABASE_URL / SUPABASE_ANON_KEY missing")
+    resp = httpx.post(
+        f"{_SUPABASE_URL}/rest/v1/rpc/{fn}",
+        headers={
+            "apikey": _SUPABASE_ANON,
+            "Authorization": f"Bearer {_SUPABASE_ANON}",
+            "Content-Type": "application/json",
+        },
+        json=args,
+        timeout=5.0,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Supabase RPC {fn} failed {resp.status_code}: {resp.text[:200]}")
 
 
 class WebhookRouter:
-    """Polar billing webhook receiver (same class-idiom as AuthRouter)."""
+    """Stripe billing webhook receiver."""
 
     def __init__(self) -> None:
         self.router = APIRouter(tags=["billing:webhook"])
@@ -58,7 +82,7 @@ class WebhookRouter:
         self.router.post("/webhook")(self.receive_webhook)
 
     async def receive_webhook(self, request: Request) -> dict[str, Any]:
-        secret = os.environ.get("POLAR_WEBHOOK_SECRET", "").strip()
+        secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
         if not secret:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -66,49 +90,47 @@ class WebhookRouter:
             )
 
         body = await request.body()
-        received_sig = (request.headers.get(_SIGNATURE_HEADER) or "").strip()
-        if not received_sig:
-            _logger.warning("signature_mismatch reason=missing_header")
-            raise HTTPException(status_code=400, detail="Missing signature header.")
-
-        expected = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, received_sig):
-            _logger.warning("signature_mismatch reason=digest_mismatch")
-            raise HTTPException(status_code=400, detail="Invalid signature.")
+        sig_header = request.headers.get("stripe-signature", "")
 
         try:
-            payload = json.loads(body.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            raise HTTPException(status_code=400, detail="Invalid JSON body.")
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Invalid JSON envelope.")
+            event = stripe.Webhook.construct_event(body, sig_header, secret)
+        except stripe.error.SignatureVerificationError as exc:
+            _logger.warning("stripe_signature_mismatch reason=%s", str(exc)[:80])
+            raise HTTPException(status_code=400, detail=f"Invalid signature: {exc}") from exc
+        except Exception as exc:
+            _logger.warning("stripe_signature_parse_failed reason=%s", type(exc).__name__)
+            raise HTTPException(status_code=400, detail="Invalid webhook payload") from exc
 
-        event_id = payload.get("id")
-        event_type = payload.get("type")
-        data = payload.get("data") or {}
-        if not isinstance(event_id, str) or not event_id:
-            raise HTTPException(status_code=400, detail="Missing or invalid 'id'.")
-        if not isinstance(event_type, str) or not event_type:
-            raise HTTPException(status_code=400, detail="Missing or invalid 'type'.")
-        if not isinstance(data, dict):
-            data = {}
+        # `event` is a stripe.Event. Since stripe-python v15 StripeObject no
+        # longer inherits from dict — .get() is gone. We use attribute access
+        # for the envelope, then convert the inner `data.object` to a plain
+        # dict so _apply_mutation can keep treating it like JSON.
+        event_id = getattr(event, "id", "") or ""
+        event_type = getattr(event, "type", "") or ""
+        inner = getattr(getattr(event, "data", None), "object", None)
+        data_object: dict[str, Any] = (
+            inner.to_dict() if inner is not None and hasattr(inner, "to_dict") else (inner or {})
+        )
+        if not event_id:
+            raise HTTPException(status_code=400, detail="Missing event id.")
+        if not event_type:
+            raise HTTPException(status_code=400, detail="Missing event type.")
 
-        # Unknown event types: 200 no-op, zero DB touch (AC #8).
+        # Unknown event types: 200 no-op.
         if event_type not in _HANDLED_TYPES:
             return {"status": "processed", "event_id": event_id}
 
         with DBSession(engine) as db:
             if db.get(BillingEvent, event_id) is not None:
-                # Idempotent replay — no mutation, no new ledger row.
                 return {"status": "processed", "event_id": event_id}
 
-            org_id = self._apply_mutation(db, event_type, data)
+            user_id = self._apply_mutation(event_type, data_object)
 
             db.add(
                 BillingEvent(
                     event_id=event_id,
                     processed_at=_naive_utc_now(),
-                    org_id=org_id,
+                    org_id=user_id,  # column name is legacy; value is user_id now
                     event_type=event_type,
                 )
             )
@@ -116,87 +138,121 @@ class WebhookRouter:
 
         return {"status": "processed", "event_id": event_id}
 
-    def _apply_mutation(
-        self,
-        db: DBSession,
-        event_type: str,
-        data: dict[str, Any],
-    ) -> Optional[str]:
-        if event_type == "checkout.completed":
-            org_id = data.get("client_reference_id")
-            plan = data.get("plan")
-            if not isinstance(org_id, str) or not org_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="checkout.completed missing client_reference_id.",
-                )
-            if plan not in _VALID_PLANS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"checkout.completed has invalid plan (got {plan!r}).",
-                )
-            org = db.get(Org, org_id)
-            if org is None:
-                # US-18 invite flow will provision Orgs — for v0 the webhook is
-                # the upstream-authoritative source, so upsert keeps AC #3 green.
-                db.add(Org(id=org_id, plan=plan))
-            else:
-                org.plan = plan
-                db.add(org)
-            return org_id
+    def _apply_mutation(self, event_type: str, obj: dict[str, Any]) -> Optional[str]:
+        """Resolve the user via `client_reference_id` / metadata and upsert
+        their subscription. Returns the user_id string for the ledger."""
+        user_id = _extract_user_id(obj)
+        if not user_id:
+            _logger.warning(
+                "billing.webhook missing user_id",
+                extra={"event_type": event_type, "keys": list(obj.keys())},
+            )
+            return None
 
-        if event_type == "subscription.created":
-            org_id = data.get("client_reference_id")
-            plan = data.get("plan")
-            if not isinstance(org_id, str) or not org_id:
-                raise HTTPException(
-                    status_code=400,
-                    detail="subscription.created missing client_reference_id.",
-                )
-            if plan not in _VALID_PLANS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"subscription.created has invalid plan (got {plan!r}).",
-                )
-            org = db.get(Org, org_id)
-            if org is None:
-                db.add(Org(id=org_id, plan=plan))
-            else:
-                org.plan = plan
-                db.add(org)
-            _logger.info("billing.tier_upgraded org=%s plan=%s", org_id, plan)
-            return org_id
+        if event_type == "customer.subscription.deleted":
+            try:
+                _call_supabase_rpc("cancel_user_subscription_from_polar", {"p_user_id": user_id})
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+            _logger.info("billing.subscription_cancelled user=%s", user_id)
+            return user_id
 
-        if event_type == "subscription.updated":
-            org_id = data.get("client_reference_id")
-            seat_count = data.get("seat_count")
-            if isinstance(org_id, str) and org_id and seat_count is not None:
-                org = db.get(Org, org_id)
-                if org is not None:
-                    try:
-                        org.seat_count = int(seat_count)
-                        db.add(org)
-                    except (TypeError, ValueError):
-                        pass
-            return org_id if isinstance(org_id, str) else None
+        plan = _extract_plan_name(obj)
+        if plan not in _VALID_PLANS:
+            _logger.warning(
+                "billing.webhook unknown plan",
+                extra={"event_type": event_type, "plan": plan},
+            )
+            return user_id  # ledger but skip DB mutation
 
-        if event_type == "subscription.cancelled":
-            org_id = data.get("client_reference_id")
-            if isinstance(org_id, str) and org_id:
-                org = db.get(Org, org_id)
-                if org is not None:
-                    org.plan = "free"
-                    parsed = _parse_dt(data.get("current_period_end"))
-                    if parsed is not None:
-                        org.plan_downgrades_at = parsed
-                    db.add(org)
-            return org_id if isinstance(org_id, str) else None
+        status_value = _map_status(obj.get("status"), fallback="active")
+        # Extract the Stripe customer id. On checkout.session.completed it's
+        # `customer`; on subscription events it's also `customer`. Persist it
+        # so /billing/portal-session can open the hosted Customer Portal.
+        customer_id = obj.get("customer")
+        if isinstance(customer_id, str) and customer_id:
+            pass
+        else:
+            customer_id = None
+        try:
+            _call_supabase_rpc(
+                "set_user_subscription_from_polar",
+                {
+                    "p_user_id": user_id,
+                    "p_plan_name": plan.capitalize(),
+                    "p_status": status_value,
+                    "p_stripe_customer_id": customer_id,
+                },
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _logger.info(
+            "billing.subscription_synced user=%s plan=%s status=%s customer=%s",
+            user_id, plan, status_value, customer_id,
+        )
+        return user_id
 
-        return None
+
+def _extract_user_id(obj: dict[str, Any]) -> Optional[str]:
+    """Stripe events carry the user id in `client_reference_id` (for Checkout
+    Session) or in `metadata.user_id` (for Subscription objects, propagated
+    via `subscription_data.metadata` at checkout time)."""
+    raw = obj.get("client_reference_id")
+    if isinstance(raw, str) and raw:
+        try:
+            return str(UUID(raw))
+        except ValueError:
+            pass
+    meta = obj.get("metadata") or {}
+    if isinstance(meta, dict):
+        raw = meta.get("user_id")
+        if isinstance(raw, str) and raw:
+            try:
+                return str(UUID(raw))
+            except ValueError:
+                pass
+    return None
+
+
+def _extract_plan_name(obj: dict[str, Any]) -> Optional[str]:
+    """Prefer the live price.nickname on the current subscription item — that
+    tracks plan changes made via the Customer Portal. Fall back to
+    metadata.plan (set at checkout and never updated) for events that don't
+    carry an items[] array, e.g. checkout.session.completed."""
+    items = (obj.get("items") or {}).get("data") or []
+    if isinstance(items, list) and items:
+        price = items[0].get("price") or {}
+        nickname = price.get("nickname")
+        if isinstance(nickname, str) and nickname:
+            return nickname.lower()
+        product_name = (price.get("product") or {}).get("name") if isinstance(price.get("product"), dict) else None
+        if isinstance(product_name, str) and product_name:
+            return product_name.lower()
+
+    meta = obj.get("metadata") or {}
+    if isinstance(meta, dict):
+        raw = meta.get("plan")
+        if isinstance(raw, str) and raw:
+            return raw.lower()
+    return None
+
+
+def _map_status(raw: Any, fallback: str = "active") -> str:
+    """Map Stripe subscription.status to our `public.subscriptions.status` enum."""
+    if not isinstance(raw, str):
+        return fallback
+    lowered = raw.lower()
+    if lowered in {"active", "trialing"}:
+        return "active"
+    if lowered in {"canceled", "cancelled"}:
+        return "cancelled"
+    if lowered in {"incomplete", "past_due", "unpaid", "incomplete_expired"}:
+        return "pending"
+    return fallback
 
 
 def _parse_dt(raw: Any) -> Optional[datetime]:
-    """Parse ISO-8601 string or unix seconds into naive UTC; None on failure."""
+    """Parse ISO-8601 or unix seconds into naive UTC."""
     if raw is None:
         return None
     if isinstance(raw, (int, float)):

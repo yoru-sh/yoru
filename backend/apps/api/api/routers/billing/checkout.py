@@ -1,82 +1,64 @@
-"""POST /api/v1/billing/checkout-session — US-15 Polar checkout session.
+"""POST /api/v1/billing/checkout-session — Stripe checkout.
 
-Wave-20-B C1 (atomic). The Polar SDK is mocked by default via a module-level
-`_polar_client = MagicMock()` so tests + smoke curls exercise the full handler
-without a live Polar account. When `POLAR_API_KEY` is set the real SDK is
-instantiated at import time.
+Uses the official `stripe` Python SDK with per-seat quantity support.
+When `STRIPE_API_KEY` is missing the handler short-circuits to a mock
+redirect so the dashboard upgrade button stays demo-able without Stripe
+credentials.
 
-Contract reference: vault/BACKEND-API-V1.md §4.1 (full v1 shape: 303 redirect +
-owner-only + env-resolved price ids). THIS endpoint is the MVP cut: 200 JSON
-response with `checkout_url` + `session_id`, `plan in {team, org}`, mock SDK.
-Follow-up waves (US-16 webhook, owner gate, quota) layer the rest.
+`client_reference_id` we send to Stripe is the authenticated user's UUID
+(from their Supabase JWT). The webhook receiver uses it to resolve which
+user's subscription row to upsert in `public.subscriptions` on checkout
+completion.
 """
 from __future__ import annotations
 
 import os
-import uuid
-from typing import Any
-from unittest.mock import MagicMock
+from uuid import UUID
 
+import stripe
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from apps.api.api.routers.receipt.deps import require_current_user
+from apps.api.api.dependencies.auth import get_current_user_id
 
-_VALID_PLANS = ("team", "org")
+_VALID_PLANS = ("pro", "team", "org")
+_VALID_CYCLES = ("monthly", "annual")
 
-_PLAN_ID_ENV = {
-    "team": "POLAR_TEAM_PLAN_ID",
-    "org": "POLAR_ORG_PLAN_ID",
+# Stripe Price IDs (NOT product IDs) — per-seat prices you create in the
+# Stripe dashboard under Products → pricing → "Recurring, per unit".
+# Annual prices are -21% of (monthly × 12) — same formula as marketing.
+_PRICE_ID_ENV = {
+    ("pro",  "monthly"): "STRIPE_PRO_PRICE_ID",
+    ("pro",  "annual"):  "STRIPE_PRO_ANNUAL_PRICE_ID",
+    ("team", "monthly"): "STRIPE_TEAM_PRICE_ID",
+    ("team", "annual"):  "STRIPE_TEAM_ANNUAL_PRICE_ID",
+    ("org",  "monthly"): "STRIPE_ORG_PRICE_ID",
+    ("org",  "annual"):  "STRIPE_ORG_ANNUAL_PRICE_ID",
 }
-_PLAN_ID_DEFAULT = {
-    "team": "plan_team_mock",
-    "org": "plan_org_mock",
+_ORG_SEAT_PRICE_ID_ENV = {
+    "monthly": "STRIPE_ORG_SEAT_PRICE_ID",
+    "annual":  "STRIPE_ORG_SEAT_ANNUAL_PRICE_ID",
 }
 
-# Deterministic namespace so the stub `_resolve_org_id(user)` is stable across
-# calls for the same user string. v1 swaps this for a real membership lookup.
-_ORG_NS = uuid.UUID("0e7b0f20-6b2f-4a6a-b0a1-0cbf3d1e7f00")
+
+def _stripe_configured() -> bool:
+    """True when STRIPE_API_KEY is present — otherwise we short-circuit to mock."""
+    return bool(os.getenv("STRIPE_API_KEY", "").strip())
 
 
-def _build_polar_client() -> Any:
-    """Instantiate the real Polar SDK when POLAR_API_KEY is set, else MagicMock.
-
-    Isolated so tests can import, patch the module-level `_polar_client`, and
-    exercise the handler without touching the network. When the real SDK is
-    unavailable (import error) we fall back to MagicMock — this keeps boot
-    resilient during local dev where `polar-sdk` may not be pinned yet.
-    """
-    api_key = os.getenv("POLAR_API_KEY", "").strip()
-    if not api_key:
-        return MagicMock()
-    try:
-        import polar_sdk  # type: ignore[import-not-found]
-    except ImportError:
-        return MagicMock()
-    return polar_sdk.Client(api_key)  # type: ignore[attr-defined]
-
-
-# Module-level SDK client. Tests `monkeypatch.setattr` on this symbol.
-_polar_client: Any = _build_polar_client()
-
-
-def _resolve_org_id(user: str) -> uuid.UUID:
-    """Return the caller's active org UUID.
-
-    TODO(wave-21): replace with a real membership lookup (Supabase JWT -> org
-    via `OrgMember` table). v0 returns a deterministic UUID5 derived from the
-    user string — equivalent to a 1:1 personal org for now.
-    """
-    return uuid.uuid5(_ORG_NS, user)
+def _configure_stripe() -> None:
+    """Set the module-level stripe.api_key from env on each call. Cheap + safe
+    even if the env var isn't set (stripe module accepts None, fails clearly
+    on first API call)."""
+    stripe.api_key = os.environ.get("STRIPE_API_KEY", "").strip() or None
 
 
 class CheckoutRequest(BaseModel):
-    # NOTE: `str` (not Literal) so an unknown plan falls through to the handler
-    # and raises 400. Pydantic Literal would 422 before we get there, which
-    # contradicts the brief's "400 on invalid plan" requirement.
     plan: str
+    cycle: str = "monthly"  # "monthly" | "annual"
     success_url: str
     cancel_url: str
+    seats: int = 1  # per-seat quantity for all paid tiers
 
 
 class CheckoutResponse(BaseModel):
@@ -104,31 +86,84 @@ class CheckoutRouter:
     def create_checkout_session(
         self,
         body: CheckoutRequest,
-        current_user: str = Depends(require_current_user),
+        user_id: UUID = Depends(get_current_user_id),
     ) -> CheckoutResponse:
         if body.plan not in _VALID_PLANS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Unknown plan",
+                detail=f"Unknown plan '{body.plan}' — must be one of {', '.join(_VALID_PLANS)}",
+            )
+        cycle = body.cycle if body.cycle in _VALID_CYCLES else "monthly"
+
+        price_id = os.environ.get(_PRICE_ID_ENV[(body.plan, cycle)], "").strip()
+
+        # Mock mode: no STRIPE_API_KEY or missing price-id env → round-trip
+        # to /settings/billing with a flag so the UI explains it.
+        if not _stripe_configured() or not price_id:
+            mock_url = f"{body.success_url}{'&' if '?' in body.success_url else '?'}mock=1&plan={body.plan}"
+            return CheckoutResponse(
+                checkout_url=mock_url,
+                session_id=f"cs_mock_{body.plan}",
             )
 
-        plan_id = os.environ.get(
-            _PLAN_ID_ENV[body.plan],
-            _PLAN_ID_DEFAULT[body.plan],
-        )
-        org_id = _resolve_org_id(current_user)
+        # All paid tiers accept variable seats, clamped to [1, 200].
+        quantity = max(1, min(200, body.seats))
 
-        response = _polar_client.checkouts.create(
-            plan_id=plan_id,
-            success_url=body.success_url,
-            cancel_url=body.cancel_url,
-            client_reference_id=str(org_id),
-        )
+        # Build line items. Org has a two-part fee: $99 base (flat) + $15
+        # per seat. Pro/Team are single-line per-unit.
+        if body.plan == "org":
+            seat_price_id = os.environ.get(_ORG_SEAT_PRICE_ID_ENV[cycle], "").strip()
+            if not seat_price_id:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="STRIPE_ORG_SEAT_PRICE_ID not configured",
+                )
+            line_items = [
+                {
+                    "price": price_id,            # $99 base
+                    "quantity": 1,
+                },
+                {
+                    "price": seat_price_id,       # $15 × seats
+                    "quantity": quantity,
+                    "adjustable_quantity": {"enabled": True, "minimum": 1, "maximum": 200},
+                },
+            ]
+        else:
+            line_items = [{
+                "price": price_id,
+                "quantity": quantity,
+                "adjustable_quantity": {"enabled": True, "minimum": 1, "maximum": 200},
+            }]
 
-        # `str()` keeps the response JSON-serializable when `_polar_client` is a
-        # MagicMock (default): `response.url` / `response.id` are MagicMock
-        # attributes unless a test swaps in `MagicMock(url=..., id=...)`.
+        _configure_stripe()
+        try:
+            session = stripe.checkout.Session.create(
+                mode="subscription",
+                line_items=line_items,
+                success_url=body.success_url,
+                cancel_url=body.cancel_url,
+                client_reference_id=str(user_id),
+                metadata={
+                    "user_id": str(user_id),
+                    "plan": body.plan,
+                    "cycle": cycle,
+                },
+                subscription_data={
+                    "metadata": {
+                        "user_id": str(user_id),
+                        "plan": body.plan,
+                        "cycle": cycle,
+                    },
+                },
+            )
+        except stripe.error.StripeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Stripe checkout create failed: {exc.user_message or str(exc)}",
+            ) from exc
+
         return CheckoutResponse(
-            checkout_url=str(response.url),
-            session_id=str(response.id),
+            checkout_url=session.url or "",
+            session_id=session.id,
         )

@@ -6,6 +6,7 @@ import {
   ORGS_ME_KEY,
   postCheckoutSession,
   type OrgsMe,
+  type Plan,
 } from "../../lib/api"
 import { toast } from "../../components/Toaster"
 
@@ -13,12 +14,31 @@ import { toast } from "../../components/Toaster"
 // pending backend US-18 — on 404/5xx we fall back to a non-exceeded state
 // so the banner stays hidden in dev. A 402 from any other endpoint flips
 // the shared cache via apiFetch's interceptor — we pick it up on next read.
+// SaaSForge exposes `/me/subscription` which returns the active SubscriptionResponse
+// with plan_name + features. We normalize to the OrgsMe shape the UI expects.
+interface MeSubscriptionRaw {
+  plan_name?: string
+  status?: string
+  features?: Record<string, unknown>
+}
+
 async function fetchOrgsMe(): Promise<OrgsMe> {
   try {
-    return await apiFetch<OrgsMe>("/orgs/me")
+    const sub = await apiFetch<MeSubscriptionRaw | null>("/me/subscription")
+    const plan = (sub?.plan_name ?? "Free").toLowerCase()
+    // Map SaaSForge plan names → the legacy OrgsMe.plan union.
+    const planKey: Plan =
+      plan === "pro" || plan === "team" || plan === "org"
+        ? (plan as Plan)
+        : "free"
+    return { plan: planKey, quota_exceeded: false }
   } catch (err) {
     if (err instanceof ApiError && err.status === 402) {
       return { plan: "free", quota_exceeded: true }
+    }
+    if (err instanceof ApiError && err.status === 404) {
+      // No subscription yet — trigger backfill hasn't fired. Treat as Free.
+      return { plan: "free", quota_exceeded: false }
     }
     return { plan: "free", quota_exceeded: false }
   }
