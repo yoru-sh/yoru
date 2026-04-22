@@ -548,18 +548,15 @@ function PlanCard({
     meta: { silent: true },
   })
 
-  // Seat picker — all paid tiers allow seat adjustment; Free is 1-seat only.
-  const perSeat = plan.name !== "Free"
+  // Seat picker — Team only. Pro is a solo-dev flat price, Free is 1-seat
+  // by definition, Org is sales-driven so no self-serve seat picker.
+  const perSeat = plan.name === "Team"
   const seatsCap = extractSeatsCap(features["seats_max"])
-  // seatsCap conventions:  N (>0) = hard cap · -1 = unlimited · 0 = unknown.
-  // Pro's seats_max=1 in the feature matrix is a legacy constraint — we lift
-  // it here so Pro also acts as a per-seat tier (still cheaper per seat than
-  // Team because Pro has worse retention / cap). If you want to enforce
-  // seats_max strictly, set `effectiveCap = Math.max(1, seatsCap)` instead.
+  // seatsCap conventions: N (>0) = hard cap · -1 = unlimited · 0 = unknown.
+  // Team's seats_max is the authoritative cap; default 200 if feature row
+  // is missing so the picker doesn't lock at 1.
   const effectiveCap = seatsCap > 0 ? Math.max(seatsCap, 10) : 200
-  const [seats, setSeats] = useState<number>(() =>
-    plan.name === "Pro" ? 1 : plan.name === "Team" ? 5 : plan.name === "Org" ? 10 : 1,
-  )
+  const [seats, setSeats] = useState<number>(() => (plan.name === "Team" ? 5 : 1))
   const clampedSeats = perSeat ? Math.max(1, Math.min(seats, effectiveCap)) : 1
 
   return (
