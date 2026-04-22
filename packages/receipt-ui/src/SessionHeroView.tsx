@@ -1,13 +1,6 @@
-import { formatCost, formatDuration, formatRelative } from "./format"
+import { formatDuration, formatRelative } from "./format"
 import { RedFlagBadge } from "./RedFlagBadge"
 import type { SessionDetail } from "./types"
-
-function fmtTok(n: number): string {
-  if (n < 1000) return String(n)
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`
-  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  return `${(n / 1_000_000_000).toFixed(2)}B`
-}
 
 interface SessionHeroViewProps {
   session: SessionDetail

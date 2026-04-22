@@ -5,6 +5,7 @@ interface ProTierBannerProps {
 }
 
 const PAID_LABELS: Record<Exclude<Plan, "free">, string> = {
+  pro: "Pro",
   team: "Team",
   org: "Org",
 }
