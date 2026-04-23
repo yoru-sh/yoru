@@ -72,7 +72,7 @@ class CacheManager:
             self.redis = redis_client
         else:
             # Use global shared SYNC connection pool (prevents "Too many connections")
-            from app.libs.redis.redis import get_global_sync_redis_pool
+            from libs.redis.redis import get_global_sync_redis_pool
             pool = get_global_sync_redis_pool()
             self.redis = redis.Redis(connection_pool=pool)
 

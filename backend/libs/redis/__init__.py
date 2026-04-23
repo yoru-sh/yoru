@@ -9,14 +9,14 @@ This module provides:
 Usage Examples:
 
 Basic caching (SYNC):
-    from app.libs.redis import CacheManager
-    
+    from libs.redis import CacheManager
+
     cache = CacheManager()  # Uses global shared sync pool
     cache.set("db", "clients", client_data, ttl=3600)
     result = cache.get("db", "clients")
 
 Queue operations (ASYNC):
-    from app.libs.redis import RedisManager
+    from libs.redis import RedisManager
     
     redis = RedisManager()  # Uses global shared async pool
     await redis.push_to_queue("scripts", job_data)
