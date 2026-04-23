@@ -113,7 +113,18 @@ class SupabaseManager:
 
         if not self.url or not self.key:
             key_var = "SUPABASE_ANON_KEY" if use_anon_key else "SUPABASE_SERVICE_ROLE_KEY"
-            error_msg = f"SUPABASE_URL and {key_var} must be provided either as parameters or environment variables"
+            # Log exactly what the container sees so we can tell "secret not
+            # injected at all" from "typo" from "set but empty".
+            env_presence = {
+                "url": bool(os.environ.get("SUPABASE_URL")),
+                "anon": bool(os.environ.get("SUPABASE_ANON_KEY")),
+                "service_role": bool(os.environ.get("SUPABASE_SERVICE_ROLE_KEY")),
+            }
+            error_msg = (
+                f"SUPABASE_URL and {key_var} must be provided. "
+                f"env presence: url={env_presence['url']}, "
+                f"anon={env_presence['anon']}, service_role={env_presence['service_role']}"
+            )
             self.logger.log_critical(error_msg)
             raise SupabaseConnectionError(error_msg)
 
