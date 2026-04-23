@@ -1,9 +1,11 @@
-"""Team dashboard router for Receipt v0.
+"""Team dashboard router.
 
 Contract: task api-team-dashboard-endpoint (PRODUCT.md §6). Aggregates
-sessions per user within a time window. No auth in v0 — a follow-up
-ticket (d2883124 auth-enforce-token-on-read-routes) will add auth
-uniformly across read routes.
+sessions per user within a time window.
+
+Auth: bearer-token gated via `require_current_user`. Pre-hardening this
+returned every user's email + session count + cost unauthenticated — a
+real PII leak caught by the 2026-04-23 endpoint sweep.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from sqlalchemy import func
 from sqlmodel import Session as SQLSession, select
 
 from .db import get_session
+from .deps import require_current_user
 from .models import (
     Session as SessionRow,
     TeamDashboardOut,
@@ -50,6 +53,7 @@ class DashboardRouter:
         self,
         since: Optional[datetime] = Query(default=None),
         db: SQLSession = Depends(get_session),
+        _user: str = Depends(require_current_user),
     ) -> TeamDashboardOut:
         since_dt = _naive_utc(since) if since is not None else _default_since()
 
