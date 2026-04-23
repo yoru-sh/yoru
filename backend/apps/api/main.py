@@ -46,6 +46,7 @@ from apps.api.api.routers.organizations.router import OrganizationsRouter
 from apps.api.api.routers.ping_router import PingRouter
 from apps.api.api.routers.plans.router import PlansRouter
 from apps.api.api.routers.promo.router import PromoRouter
+from apps.api.api.routers.sales.contact import SalesContactRouter
 from apps.api.api.routers.subscriptions.router import SubscriptionsRouter
 from apps.api.api.routers.receipt.auth_router import AuthRouter
 from apps.api.api.routers.receipt.dashboard_router import DashboardRouter
@@ -120,6 +121,7 @@ app.add_middleware(
     exempt_prefixes=[
         "/api/v1/sessions/events",      # CLI hook-token ingest, bearer auth
         "/api/v1/billing/webhook",      # Polar webhook, signature-authenticated
+        "/api/v1/sales/contact",        # public form from marketing/, honeypot + rate-limit
     ],
 )
 
@@ -213,6 +215,12 @@ app.include_router(portal_router.get_router(), prefix="/api/v1/billing")
 
 billing_webhook_router = WebhookRouter()
 app.include_router(billing_webhook_router.get_router(), prefix="/api/v1/billing")
+
+# Public Contact-Sales form endpoint — unauth, rate-limited, honeypot-protected.
+# Writes to sales_leads + emails sales@yoru.sh. Cloud-only in practice;
+# self-hosters can skip the sales_leads migration if they don't expose a form.
+sales_contact_router = SalesContactRouter()
+app.include_router(sales_contact_router.get_router(), prefix="/api/v1")
 
 webhooks_router = WebhooksRouter()
 app.include_router(webhooks_router.get_router(), prefix="/api/v1")

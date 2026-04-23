@@ -80,6 +80,7 @@ The repo ships these migrations:
 | `performance_optimization_views.sql` | `user_subscription_details` view |
 | `route_rules_schema.sql` | Workspace routing escape hatch |
 | `welcome_email_sent_at.sql` | Email idempotency column |
+| `sales_leads_schema.sql` | **Optional** — backs the `/api/v1/sales/contact` endpoint (Contact-Sales form on yoru.sh). Only apply if you plan to expose a public contact form against your instance. Most self-hosters can skip it. |
 
 After migrations, insert seed plans if your project doesn't already have them:
 
