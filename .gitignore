@@ -69,3 +69,4 @@ backend/receipt.db
 
 # Runtime caches populated by pricing warmup etc.
 backend/data/*.json
+.saasforge
