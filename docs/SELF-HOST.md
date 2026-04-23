@@ -351,7 +351,7 @@ migration run. Watch the release notes; we tag breaking migrations with a
 
 ## When to reach out
 
-Open an issue on `github.com/helios-code/overnight-saas` for:
+Open an issue on `github.com/yoru-sh/yoru` for:
 
 - A migration that fails on your Supabase (we'll ship a fix)
 - A feature you want gated behind a plan that isn't (we'll land an override)
