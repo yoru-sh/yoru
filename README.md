@@ -1,105 +1,45 @@
-# Receipt
+# Yoru
 
-**Status:** `v0 / MVP` &middot; **Python:** `3.10+` &middot; **License:** internal (v0)
+Audit trail for autonomous AI coding agents. This is the source-of-truth monorepo
+for [yoru.sh](https://yoru.sh) — Cloud backend, dashboard, marketing site, CLI, and
+self-host docs. Dual-licensed: **MIT** for the CLI, **AGPL-3.0** for the server.
 
-Audit-grade session receipts for autonomous AI coding agents. Receipt captures every
-Claude Code session as a structured ledger — every tool call, file edit, red-flag event,
-token cost, and elapsed time — and turns it into a reviewable timeline. Install once,
-see your first Receipt within 60 seconds.
+> **Public mirrors** (synced from this monorepo on every `main` push):
+> - CLI (MIT) — [github.com/yoru-sh/cli](https://github.com/yoru-sh/cli) · `pip install yoru-cli`
+> - Server + dashboard (AGPL) — [github.com/yoru-sh/yoru](https://github.com/yoru-sh/yoru) · `docker-compose up`
+>
+> The marketing site (`marketing/`) stays Cloud-only and is not mirrored.
 
-```text
-$ receipt init --user you@example.com --server http://localhost:8002
-→ hook installed: ~/.claude/hooks/receipt.sh
-→ config saved : ~/.config/receipt/config.json  (token rcpt_••••)
-→ next Claude Code session will stream events to /api/v1/sessions/events
-```
+## Layout
 
----
+| Directory          | License | What it is                                                 |
+|--------------------|---------|------------------------------------------------------------|
+| `yoru-cli/`        | MIT     | `pip install yoru-cli` — Claude Code hook installer        |
+| `backend/`         | AGPL    | FastAPI service, SQLite ingest, Supabase multi-tenant      |
+| `frontend/`        | AGPL    | React dashboard (app.yoru.sh)                              |
+| `packages/receipt-ui/` | AGPL | Shared component library consumed by `frontend/` and `marketing/` |
+| `marketing/`       | AGPL    | yoru.sh landing + pricing (Cloud-only, not mirrored)       |
+| `docs/`            | AGPL    | Self-host guide, architecture, hook spec                   |
 
-## 1. Install
-
-Two pieces: the CLI (wires the Claude Code hook) and the backend (stores events,
-computes red flags, serves the timeline). Both run locally for v0.
-
-```bash
-git clone <repo-url> overnight-saas
-cd overnight-saas
-
-# CLI — editable install from the monorepo
-pip install -e receipt-cli/
-
-# Backend — uv-managed FastAPI app on :8002
-make install           # uv sync + npm ci
-make restart-backend   # uvicorn on :8002, idempotent
-curl http://localhost:8002/health/ready    # -> {"status":"ok", ...}
-```
-
-CLI runtime dep: `httpx`. Backend runtime: Python 3.11 + SQLite (no Postgres, Redis, or
-external services in v0).
-
-## 2. 60-second smoke
-
-End-to-end from a fresh checkout — mirrors `scripts/smoke-us14.sh`:
+## Local dev (solo-dev workflow)
 
 ```bash
-# 1. install the CLI (skip if already done above)
-pip install -e receipt-cli/
+# backend on :8002
+make install             # uv sync + npm ci
+make restart-backend     # idempotent
+curl http://localhost:8002/health/ready
 
-# 2. wire the hook for your email
-receipt init --user you@example.com --server http://localhost:8002
-
-# 3. post 3 events in one session (one flagged — touches .env)
-curl -sf -X POST http://localhost:8002/api/v1/sessions/events \
-  -H 'Content-Type: application/json' \
-  -d '{"events":[
-    {"session_id":"demo","user":"you@example.com","kind":"tool_use","tool":"Bash","content":"ls -la"},
-    {"session_id":"demo","user":"you@example.com","kind":"file_change","path":".env","content":"API_KEY=redacted"},
-    {"session_id":"demo","user":"you@example.com","kind":"tool_use","tool":"Edit","path":"src/app.py"}
-  ]}'
+# CLI (editable from the monorepo)
+pip install -e yoru-cli/
+yoru init --server http://localhost:8002
 ```
 
-The response carries `flagged_sessions: ["demo"]` — the `.env` edit tripped the
-`env_mutation` red-flag rule. Under 60 seconds, hook to Receipt, no dashboard required.
+See [`docs/SELF-HOST.md`](docs/SELF-HOST.md) for running Yoru on your own infra,
+and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the stack layout.
 
-## 3. Hook into Claude Code
+## License
 
-`receipt init` drops a bash hook at `~/.claude/hooks/receipt.sh` that forwards each tool
-call to the backend with a bearer token. Wire it into Claude Code by adding a
-`PostToolUse` entry to `~/.claude/settings.json`:
+- CLI (`yoru-cli/`): [MIT](./yoru-cli/LICENSE) — free to bundle anywhere, no copyleft.
+- Everything else: [AGPL-3.0](./LICENSE) — modifying the server and exposing it to other users triggers the source-distribution clause. Fine for internal company self-hosting; call us before running a competing Cloud on top of this code.
 
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {"hooks": [{"type": "command", "command": "~/.claude/hooks/receipt.sh"}]}
-    ]
-  }
-}
-```
-
-The hook uses `curl --max-time 2 || true` — it never blocks the agent, even if the
-backend is down. See [`docs/HOOK-WIRING.md`](docs/HOOK-WIRING.md) for event shape, auth,
-and troubleshooting.
-
-## 4. What you get
-
-- **Timeline** — per-session view of every tool call, file change, and edit, ordered
-  and addressable by URL. `GET /api/v1/sessions/{id}`.
-- **Red flags** — eight static rules detect secrets (AWS / Stripe / JWT / SSH keys),
-  destructive shell (`rm -rf`), migration files, `.env` mutations, and CI config writes.
-  Flagged sessions surface on the list page and badge per event.
-- **3-line TL;DR** — deterministic v0 summary per session (tools used, files touched,
-  total cost). `POST /api/v1/sessions/{id}/summary` generates; `GET` returns the cache.
-
-## 5. Docs — deep dives
-
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — stack, layout, boundaries
-- [`docs/API.md`](docs/API.md) — full endpoint reference + auth model
-- [`docs/HOOK-WIRING.md`](docs/HOOK-WIRING.md) — Claude Code hook shape + event schema
-- [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) — dev loop, tests, restart-backend
-
-## 6. License
-
-Internal / unlicensed while v0 is in flight. A proper OSS or commercial license will
-land alongside the first public tag. v0 is an MVP — API shapes, auth, and on-disk
-formats may change without notice before v1.
+See [`LICENSING.md`](./LICENSING.md) for the rationale.
