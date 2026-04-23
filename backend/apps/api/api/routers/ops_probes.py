@@ -3,7 +3,7 @@
 Three independent probes, each hard-timeboxed at 500ms:
   1. db_roundtrip           — SELECT 1 + write-read on `health_probe` table
   2. uploads_writable       — create+fsync+stat+unlink tombstone under DATA_DIR
-  3. hook_token_signing_key — SELECT count(*) FROM hook_tokens (auth stack loadable)
+  3. hook_token_signing_key — SELECT count(*) FROM cli_tokens (auth stack loadable)
 
 Probes run concurrently in a ThreadPoolExecutor so total wall time stays <2s
 even if one hits the timeout. Failures never short-circuit the others — the
@@ -75,7 +75,7 @@ def _probe_hook_token_signing_key(engine: Engine) -> tuple[str, str]:
     """
     t0 = time.perf_counter()
     with engine.connect() as conn:
-        row = conn.execute(text("SELECT count(*) FROM hook_tokens")).first()
+        row = conn.execute(text("SELECT count(*) FROM cli_tokens")).first()
     count = int(row[0]) if row else 0
     return "ok", f"count={count} {int((time.perf_counter() - t0) * 1000)}ms"
 
