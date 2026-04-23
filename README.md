@@ -1,45 +1,51 @@
 # Yoru
 
-Audit trail for autonomous AI coding agents. This is the source-of-truth monorepo
-for [yoru.sh](https://yoru.sh) — Cloud backend, dashboard, marketing site, CLI, and
-self-host docs. Dual-licensed: **MIT** for the CLI, **AGPL-3.0** for the server.
+Audit trail for autonomous AI coding agents. Install a Claude Code hook, get a dashboard showing every tool call, file edit, and red-flag event your overnight agent ran — plus a per-session letter grade on Throughput, Reliability, and Safety.
 
-> **Public mirrors** (synced from this monorepo on every `main` push):
-> - CLI (MIT) — [github.com/yoru-sh/cli](https://github.com/yoru-sh/cli) · `pip install yoru-cli`
-> - Server + dashboard (AGPL) — [github.com/yoru-sh/yoru](https://github.com/yoru-sh/yoru) · `docker-compose up`
->
-> The marketing site (`marketing/`) stays Cloud-only and is not mirrored.
+> **Don't want to host?** Yoru Cloud is free forever for one developer at [yoru.sh](https://yoru.sh). This repo is the AGPL-licensed server for self-hosting.
+
+## Self-host, quick path
+
+```bash
+git clone https://github.com/yoru-sh/yoru.git && cd yoru
+cp backend/.env.example backend/.env   # fill in Supabase + SMTP
+docker compose up -d
+```
+
+Then point the CLI at your instance:
+
+```bash
+pip install yoru-cli
+yoru init --server https://yoru.acme.com
+```
+
+Full walkthrough with Supabase schema bootstrap, GitHub OAuth, and SMTP in [`docs/SELF-HOST.md`](docs/SELF-HOST.md).
 
 ## Layout
 
-| Directory          | License | What it is                                                 |
-|--------------------|---------|------------------------------------------------------------|
-| `yoru-cli/`        | MIT     | `pip install yoru-cli` — Claude Code hook installer        |
-| `backend/`         | AGPL    | FastAPI service, SQLite ingest, Supabase multi-tenant      |
-| `frontend/`        | AGPL    | React dashboard (app.yoru.sh)                              |
-| `packages/receipt-ui/` | AGPL | Shared component library consumed by `frontend/` and `marketing/` |
-| `marketing/`       | AGPL    | yoru.sh landing + pricing (Cloud-only, not mirrored)       |
-| `docs/`            | AGPL    | Self-host guide, architecture, hook spec                   |
+| Directory | What it is |
+|---|---|
+| `backend/` | FastAPI service — event ingest, red-flag detection, session scoring, Supabase-backed multi-tenant |
+| `frontend/` | React dashboard (the app a self-hoster exposes to their team) |
+| `packages/receipt-ui/` | Shared component library consumed by `frontend/` |
+| `docs/` | Self-host guide, architecture, hook contract |
 
-## Local dev (solo-dev workflow)
+The CLI lives in a separate MIT repo: [github.com/yoru-sh/cli](https://github.com/yoru-sh/cli) · `pip install yoru-cli`.
+
+## Dev setup (contributors)
 
 ```bash
-# backend on :8002
-make install             # uv sync + npm ci
-make restart-backend     # idempotent
+make install             # uv sync (Python) + npm ci (JS)
+make restart-backend     # uvicorn on :8002, idempotent
 curl http://localhost:8002/health/ready
-
-# CLI (editable from the monorepo)
-pip install -e yoru-cli/
-yoru init --server http://localhost:8002
 ```
 
-See [`docs/SELF-HOST.md`](docs/SELF-HOST.md) for running Yoru on your own infra,
-and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the stack layout.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the stack layout and boundaries.
 
 ## License
 
-- CLI (`yoru-cli/`): [MIT](./yoru-cli/LICENSE) — free to bundle anywhere, no copyleft.
-- Everything else: [AGPL-3.0](./LICENSE) — modifying the server and exposing it to other users triggers the source-distribution clause. Fine for internal company self-hosting; call us before running a competing Cloud on top of this code.
+AGPL-3.0 · [LICENSE](./LICENSE). Modifying the server and exposing it to other users triggers the source-distribution clause — fine for internal company self-hosting, talk to us first before running a competing hosted service on top of this code.
 
-See [`LICENSING.md`](./LICENSING.md) for the rationale.
+The CLI is MIT (separate repo). See [`LICENSING.md`](./LICENSING.md) for the full rationale.
+
+Issues and PRs welcome.
