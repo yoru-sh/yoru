@@ -6,6 +6,13 @@ sessions per user within a time window.
 Auth: bearer-token gated via `require_current_user`. Pre-hardening this
 returned every user's email + session count + cost unauthenticated — a
 real PII leak caught by the 2026-04-23 endpoint sweep.
+
+Scope: results are narrowed to workspaces the caller has a session in
+(proxy for "users who share a workspace with me"). A user solo on their
+personal workspace sees only themselves. A user in an org sees teammates
+who've actually run sessions there. Sessions with NULL workspace_id
+(legacy, pre-routing) are treated as the caller's personal scope — they
+see only their own legacy rows.
 """
 from __future__ import annotations
 
@@ -53,9 +60,25 @@ class DashboardRouter:
         self,
         since: Optional[datetime] = Query(default=None),
         db: SQLSession = Depends(get_session),
-        _user: str = Depends(require_current_user),
+        current_user: str = Depends(require_current_user),
     ) -> TeamDashboardOut:
         since_dt = _naive_utc(since) if since is not None else _default_since()
+
+        # Workspaces the caller has activity in. This is the "team" — anyone
+        # else who's routed a session to one of these workspaces is visible.
+        my_workspaces_stmt = (
+            select(SessionRow.workspace_id)
+            .where(SessionRow.user == current_user)
+            .where(SessionRow.workspace_id.is_not(None))
+            .distinct()
+        )
+        my_workspace_ids = [w for w in db.exec(my_workspaces_stmt).all() if w]
+
+        # Always include the caller themselves — covers the solo-on-Free case
+        # and legacy sessions where workspace_id is NULL.
+        scope_filter = SessionRow.user == current_user
+        if my_workspace_ids:
+            scope_filter = scope_filter | SessionRow.workspace_id.in_(my_workspace_ids)
 
         group_stmt = (
             select(
@@ -67,6 +90,7 @@ class DashboardRouter:
                 ),
             )
             .where(SessionRow.started_at >= since_dt)
+            .where(scope_filter)
             .group_by(SessionRow.user)
             .order_by(SessionRow.user)
         )
