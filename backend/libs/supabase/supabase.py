@@ -49,6 +49,7 @@ class SupabaseManager:
         enable_cache: bool = True,
         cache_manager: Optional[CacheManager] = None,
         enable_circuit_breaker: bool = True,
+        use_anon_key: bool = False,
     ):
         """
         Initializes the SupabaseManager with connection parameters and sets up the Supabase client.
@@ -56,14 +57,28 @@ class SupabaseManager:
         If parameters are not provided, values are loaded from environment variables.
         Logs the initialization status and raises an exception if client creation fails.
 
+        Default key source is SUPABASE_SERVICE_ROLE_KEY so backend code runs at
+        trusted-server scope (bypasses RLS). When acting on behalf of a user,
+        pass their JWT via `access_token=` — PostgREST then evaluates RLS with
+        `auth.uid()` set to that user. For rare pre-auth flows that genuinely
+        need the public anon key (e.g. a signup endpoint that must fail the
+        same way an anon browser would), pass `use_anon_key=True`.
+
+        See https://github.com/helios-code/overnight-saas/issues/48 for the
+        rationale — running everything on SUPABASE_ANON_KEY leaked the anon
+        role's capabilities to all backend services and blocked every RLS
+        tightening the Supabase advisor flagged.
+
         Args:
             url: Supabase project URL
-            key: Supabase anon/service key
+            key: Supabase key override (takes precedence over env + use_anon_key)
             access_token: Optional user access token for authenticated requests
             enable_cache: Enable Redis caching (default: True)
             cache_manager: Optional CacheManager instance (creates new if None)
             enable_circuit_breaker: Enable circuit breaker protection (default: True)
-            timeout: HTTP timeout in seconds (default: 30, or from SUPABASE_TIMEOUT env var)
+            use_anon_key: Source the key from SUPABASE_ANON_KEY instead of
+                SUPABASE_SERVICE_ROLE_KEY. Only use for deliberately
+                low-privilege flows.
         """
         self.logger = LoggingController(app_name="SupabaseManager")
 
@@ -86,11 +101,19 @@ class SupabaseManager:
             self.logger.log_debug("Circuit breaker disabled for Supabase")
 
         self.url = url or os.environ.get("SUPABASE_URL")
-        self.key = key or os.environ.get("SUPABASE_ANON_KEY")
+        if key:
+            self.key = key
+        elif use_anon_key:
+            self.key = os.environ.get("SUPABASE_ANON_KEY")
+        else:
+            # Default: service_role key — bypasses RLS, safe because backend
+            # code is trusted and user-scoped operations pass `access_token=`.
+            self.key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
         self.access_token = access_token
 
         if not self.url or not self.key:
-            error_msg = "SUPABASE_URL and SUPABASE_ANON_KEY must be provided either as parameters or environment variables"
+            key_var = "SUPABASE_ANON_KEY" if use_anon_key else "SUPABASE_SERVICE_ROLE_KEY"
+            error_msg = f"SUPABASE_URL and {key_var} must be provided either as parameters or environment variables"
             self.logger.log_critical(error_msg)
             raise SupabaseConnectionError(error_msg)
 

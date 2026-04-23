@@ -42,12 +42,12 @@ class ContactResponse(BaseModel):
 
 
 def _service_role_supabase() -> SupabaseManager:
-    """Bypass-RLS client for inserting leads from an unauth endpoint."""
-    return SupabaseManager(
-        url=os.environ["SUPABASE_URL"],
-        key=os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-        enable_cache=False,
-    )
+    """Bypass-RLS client for inserting leads from an unauth endpoint.
+
+    SupabaseManager defaults to service_role since issue #48; this helper
+    just disables cache for the one-shot insert.
+    """
+    return SupabaseManager(enable_cache=False)
 
 
 def _hash_ip(ip: Optional[str]) -> Optional[str]:
