@@ -3,28 +3,34 @@
 Contract: task api-team-dashboard-endpoint (PRODUCT.md §6). Aggregates
 sessions per user within a time window.
 
-Auth: bearer-token gated via `require_current_user`. Pre-hardening this
-returned every user's email + session count + cost unauthenticated — a
-real PII leak caught by the 2026-04-23 endpoint sweep.
+Auth: cookie or bearer JWT via `get_current_user_id` (dashboard flow).
+Pre-hardening this was unauthenticated and leaked every user's email +
+session count + cost to anyone — fixed 2026-04-23.
 
-Scope: results are narrowed to workspaces the caller has a session in
-(proxy for "users who share a workspace with me"). A user solo on their
-personal workspace sees only themselves. A user in an org sees teammates
-who've actually run sessions there. Sessions with NULL workspace_id
-(legacy, pre-routing) are treated as the caller's personal scope — they
-see only their own legacy rows.
+Scope: the caller sees users active in workspaces the caller is a member
+of — derived from Supabase (not from SQLite session activity). Membership
+rules:
+  - Personal workspace: `workspaces.owner_user_id = caller AND org_id IS NULL`
+  - Org workspace:      `workspaces.org_id IN (orgs where caller is a member)`
+
+Using Supabase as the source of truth means a teammate who just joined
+your org shows up immediately — they don't need to run a session first.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
 from sqlmodel import Session as SQLSession, select
 
+from apps.api.api.dependencies.auth import get_current_user_id
+from libs.log_manager.controller import LoggingController
+from libs.supabase.supabase import SupabaseManager
+
 from .db import get_session
-from .deps import require_current_user
 from .models import (
     Session as SessionRow,
     TeamDashboardOut,
@@ -41,6 +47,85 @@ def _naive_utc(d: datetime) -> datetime:
 
 def _default_since() -> datetime:
     return _naive_utc(datetime.now(timezone.utc) - timedelta(days=7))
+
+
+def _resolve_scope(user_id: UUID) -> tuple[list[str], Optional[str]]:
+    """Resolve the caller's workspace-membership scope.
+
+    Returns (workspace_ids, caller_email):
+      - workspace_ids: every workspace where the caller is owner (personal)
+        or a member of the owning organization (team).
+      - caller_email: the email recorded on auth.users, used to include the
+        caller's own legacy (NULL-workspace) sessions in the aggregate.
+
+    Uses the service-role Supabase client — the caller's identity has
+    already been verified by `get_current_user_id`, and we only need to
+    read trusted membership rows, no user-specific RLS scoping needed.
+    """
+    logger = LoggingController(app_name="DashboardRouter")
+    sb = SupabaseManager(enable_cache=False).client
+    user_id_str = str(user_id)
+
+    caller_email: Optional[str] = None
+    try:
+        profile = (
+            sb.table("profiles")
+            .select("email")
+            .eq("id", user_id_str)
+            .limit(1)
+            .execute()
+        )
+        if profile.data:
+            caller_email = profile.data[0].get("email")
+    except Exception as exc:
+        # Non-fatal — aggregate still filters by workspace_ids. We just won't
+        # include legacy NULL-workspace rows for this caller.
+        logger.log_warning(
+            "Failed to resolve caller email from profiles", {"error": str(exc)}
+        )
+
+    try:
+        orgs_rows = (
+            sb.table("organization_members")
+            .select("org_id")
+            .eq("user_id", user_id_str)
+            .execute()
+        )
+        my_org_ids = [r["org_id"] for r in (orgs_rows.data or []) if r.get("org_id")]
+    except Exception as exc:
+        logger.log_warning(
+            "Failed to list organization_members for caller",
+            {"error": str(exc)},
+        )
+        my_org_ids = []
+
+    workspace_ids: list[str] = []
+    try:
+        personal = (
+            sb.table("workspaces")
+            .select("id")
+            .eq("owner_user_id", user_id_str)
+            .is_("org_id", "null")
+            .is_("deleted_at", "null")
+            .execute()
+        )
+        workspace_ids.extend(r["id"] for r in (personal.data or []) if r.get("id"))
+
+        if my_org_ids:
+            team = (
+                sb.table("workspaces")
+                .select("id")
+                .in_("org_id", my_org_ids)
+                .is_("deleted_at", "null")
+                .execute()
+            )
+            workspace_ids.extend(r["id"] for r in (team.data or []) if r.get("id"))
+    except Exception as exc:
+        logger.log_warning(
+            "Failed to resolve workspaces for caller", {"error": str(exc)}
+        )
+
+    return workspace_ids, caller_email
 
 
 class DashboardRouter:
@@ -60,25 +145,18 @@ class DashboardRouter:
         self,
         since: Optional[datetime] = Query(default=None),
         db: SQLSession = Depends(get_session),
-        current_user: str = Depends(require_current_user),
+        user_id: UUID = Depends(get_current_user_id),
     ) -> TeamDashboardOut:
         since_dt = _naive_utc(since) if since is not None else _default_since()
 
-        # Workspaces the caller has activity in. This is the "team" — anyone
-        # else who's routed a session to one of these workspaces is visible.
-        my_workspaces_stmt = (
-            select(SessionRow.workspace_id)
-            .where(SessionRow.user == current_user)
-            .where(SessionRow.workspace_id.is_not(None))
-            .distinct()
-        )
-        my_workspace_ids = [w for w in db.exec(my_workspaces_stmt).all() if w]
+        workspace_ids, caller_email = _resolve_scope(user_id)
 
-        # Always include the caller themselves — covers the solo-on-Free case
-        # and legacy sessions where workspace_id is NULL.
-        scope_filter = SessionRow.user == current_user
-        if my_workspace_ids:
-            scope_filter = scope_filter | SessionRow.workspace_id.in_(my_workspace_ids)
+        # Always include the caller themselves by email so legacy rows with
+        # workspace_id = NULL still show up for their owner, and so a brand-new
+        # user with zero org memberships still sees their own activity.
+        scope_filter = SessionRow.user == caller_email
+        if workspace_ids:
+            scope_filter = scope_filter | SessionRow.workspace_id.in_(workspace_ids)
 
         group_stmt = (
             select(
