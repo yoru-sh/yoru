@@ -54,14 +54,18 @@ def get_global_async_redis_pool() -> redis.ConnectionPool:
             decode_responses=True,
             retry_on_timeout=True,
             retry_on_error=[redis.ConnectionError, redis.TimeoutError],
-            socket_connect_timeout=60,
-            socket_timeout=120,
+            # Short-circuit: when Redis isn't reachable (e.g. no Redis
+            # deployed in prod), we want to fail-fast and let callers
+            # fallback to the authoritative store instead of hanging 60s
+            # per request. Override via REDIS_SOCKET_CONNECT_TIMEOUT.
+            socket_connect_timeout=int(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", "2")),
+            socket_timeout=int(os.getenv("REDIS_SOCKET_TIMEOUT", "5")),
             socket_keepalive=True,
             socket_keepalive_options={},
             health_check_interval=30,
             max_connections=100,  # Global limit across all instances
         )
-    
+
     return _global_async_redis_pool
 
 
@@ -85,14 +89,17 @@ def get_global_sync_redis_pool() -> redis_sync.ConnectionPool:
             decode_responses=True,
             retry_on_timeout=True,
             retry_on_error=[redis_sync.ConnectionError, redis_sync.TimeoutError],
-            socket_connect_timeout=60,
-            socket_timeout=200,  # Longer for BRPOP operations
+            # See async-pool note above. Sync pool keeps a longer read
+            # timeout for BRPOP-style blocking ops, but connect still
+            # short-circuits fast when Redis isn't there.
+            socket_connect_timeout=int(os.getenv("REDIS_SOCKET_CONNECT_TIMEOUT", "2")),
+            socket_timeout=int(os.getenv("REDIS_SOCKET_BLOCKING_TIMEOUT", "30")),
             socket_keepalive=True,
             socket_keepalive_options={},
             health_check_interval=30,
             max_connections=100,  # Global limit across all instances
         )
-    
+
     return _global_sync_redis_pool
 
 
