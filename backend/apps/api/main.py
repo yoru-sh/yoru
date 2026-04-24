@@ -163,13 +163,6 @@ app.include_router(export_router.get_router(), prefix="/api/v1")
 sessions_router = SessionsRouter()
 app.include_router(sessions_router.get_router(), prefix="/api/v1")
 
-# Issue #79 — public (unauth) reader for sessions flipped public via
-# /sessions/{id}/share. Mounted separately so the /public/ prefix lives
-# next to /sessions/ without the authed router knowing about it.
-from apps.api.api.routers.receipt.public_sessions_router import PublicSessionsRouter  # noqa: E402
-public_sessions_router = PublicSessionsRouter()
-app.include_router(public_sessions_router.get_router(), prefix="/api/v1")
-
 summary_router = SummaryRouter()
 summary_router.initialize_services()
 app.include_router(summary_router.get_router(), prefix="/api/v1")

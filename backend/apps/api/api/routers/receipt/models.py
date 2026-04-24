@@ -60,10 +60,6 @@ class Session(SQLModel, table=True):
     cwd: Optional[str] = Field(default=None)
     git_remote: Optional[str] = Field(default=None, index=True)
     git_branch: Optional[str] = Field(default=None)
-    # Opt-in public share flag (issue #79). Default false — every session
-    # starts private. Flipped by POST /sessions/{id}/share. Gates read
-    # access on GET /public/sessions/{id} (unauth, redacted).
-    is_public: bool = Field(default=False, index=True)
 
 
 class Event(SQLModel, table=True):
@@ -289,9 +285,6 @@ class SessionListItem(SQLModel):
     flags: list[str]
     title: Optional[str] = None
     workspace_id: Optional[str] = None
-    # Opt-in public share flag (#79) — surfaced so the dashboard can render
-    # the "Make public" toggle state without a second round trip.
-    is_public: bool = False
 
 
 class SessionListResponse(SQLModel):
@@ -503,81 +496,3 @@ class TeamDashboardTotals(SQLModel):
 class TeamDashboardOut(SQLModel):
     users: list[TeamDashboardUser]
     totals: TeamDashboardTotals
-
-
-# ---------- Public share (#79) ----------
-
-class ShareIn(SQLModel):
-    """Request body for POST /sessions/{id}/share.
-
-    `source` lets the caller identify whether the toggle came from the
-    dashboard UI or the CLI (`yoru share`). We count both to measure which
-    affordance actually drives the share loop. Defaults to "dashboard" so
-    the frontend doesn't have to send it.
-    """
-    source: Literal["dashboard", "cli"] = "dashboard"
-
-
-class ShareOut(SQLModel):
-    """Response from POST /sessions/{id}/share and /revoke."""
-    session_id: str
-    is_public: bool
-    # Canonical public URL when is_public=true, None when private/revoked.
-    public_url: Optional[str] = None
-
-
-class PublicEventOut(SQLModel):
-    """Event shape for unauth GET /public/sessions/{id}.
-
-    Same structural fields as EventOut but `content`, `output`, and
-    `tool_input` are stripped when the event carries any `secret_*` flag —
-    we preserve the *fact* a secret was flagged (viewers want to see "Claude
-    almost pushed an AWS key here") but hide the secret itself.
-    """
-    id: int
-    ts: datetime
-    kind: str
-    tool: Optional[str]
-    path: Optional[str]
-    content: Optional[str]
-    flags: list[str]
-    duration_ms: Optional[int] = None
-    group_key: Optional[str] = None
-    output: Optional[str] = None
-    tool_input: Optional[dict] = None
-
-
-class PublicSessionOut(SQLModel):
-    """Public-facing session detail for unauth /public/sessions/{id}.
-
-    Differs from SessionDetail by explicit PII redaction:
-    - `user` (owner email) is NOT included.
-    - `cwd`, `git_remote`, `git_branch` are NOT included — they leak the
-      machine's directory layout and the private repo URL.
-    - `workspace_id` is NOT included — internal routing id, not useful
-      publicly and could enable enumeration.
-    - Events with `secret_*` flags have content/output/tool_input stripped
-      by the router before serialization.
-
-    Grade, red-flag categories, token aggregates, tool names, and file
-    paths remain visible. File paths ARE publicly visible (warned at
-    opt-in time) because the redacted replay still needs to show "Claude
-    edited src/auth/bearer.ts" to be narrative.
-    """
-    id: str
-    agent: str
-    started_at: datetime
-    ended_at: Optional[datetime]
-    tools_count: int
-    files_count: int
-    tokens_input: int
-    tokens_output: int
-    cost_usd: float
-    flagged: bool
-    flags: list[str]
-    title: Optional[str]
-    files_changed: list[FileChangedOut]
-    tools_called: list[str]
-    summary: Optional[str]
-    events: list[PublicEventOut]
-    score: Optional[ScoreBreakdown] = None

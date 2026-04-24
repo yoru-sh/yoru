@@ -11,8 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import func
 from sqlmodel import Session as SQLSession, select
 
-import os
-
 from .db import get_session
 from .deps import require_current_user
 from dataclasses import asdict
@@ -25,20 +23,10 @@ from .models import (
     SessionDetail,
     SessionListItem,
     SessionListResponse,
-    ShareIn,
-    ShareOut,
     TrailOut,
     TrailSession,
 )
 from .scoring import compute_score
-
-# Public site that serves /s/<id>. The marketing app (marketing/) owns that
-# route — see PublicSessionPage. Override in test/stage via env.
-_PUBLIC_SITE_BASE = os.environ.get("YORU_PUBLIC_URL", "https://yoru.sh").rstrip("/")
-
-
-def _public_session_url(session_id: str) -> str:
-    return f"{_PUBLIC_SITE_BASE}/s/{session_id}"
 
 # Tool-name classes for path/content extraction (v1 timeline enrichment).
 _FILE_TOOLS = frozenset({"Read", "Edit", "Write", "MultiEdit", "NotebookEdit"})
@@ -312,14 +300,6 @@ class SessionsRouter:
         self.router.delete("/{session_id}/tailer-events", status_code=204)(
             self.delete_tailer_events
         )
-        # Issue #79 — opt-in public share. Both endpoints are authed +
-        # owner-only. Idempotent (share sets to true, revoke sets to false).
-        self.router.post("/{session_id}/share", response_model=ShareOut)(
-            self.share_session
-        )
-        self.router.post(
-            "/{session_id}/share/revoke", response_model=ShareOut
-        )(self.revoke_share)
 
     def list_sessions(
         self,
@@ -515,74 +495,4 @@ class SessionsRouter:
             events=_enrich_events(list(events)),
             exported_at=datetime.now(timezone.utc),
             schema_version="v0",
-        )
-
-    # ---- Issue #79 — public share toggle (authed, owner-only, idempotent) ----
-
-    def share_session(
-        self,
-        session_id: str,
-        body: Optional[ShareIn] = None,
-        db: SQLSession = Depends(get_session),
-        current_user: str = Depends(require_current_user),
-    ) -> ShareOut:
-        """Flip this session public. Idempotent — re-POSTing returns the
-        same canonical URL. Only the owner can flip it. 404 (not 403) on
-        cross-user to avoid leaking existence, same as /sessions/{id}.
-
-        `body.source` ("dashboard" | "cli") is recorded in app logs so we
-        can measure which affordance actually drives share adoption.
-        """
-        row = db.exec(
-            select(SessionRow).where(SessionRow.id == session_id)
-        ).first()
-        if row is None or row.user != current_user:
-            raise HTTPException(status_code=404, detail="session not found")
-
-        source = (body.source if body is not None else "dashboard")
-        # Breadcrumb for analytics. Structured logging middleware picks it up.
-        # We don't persist a per-share counter row in v0 — the log aggregator
-        # is enough for the "dashboard vs cli" split question.
-        print(
-            f"[share] session={session_id} user={current_user} "
-            f"source={source} transition={'private->public' if not row.is_public else 'noop'}"
-        )
-
-        if not row.is_public:
-            row.is_public = True
-            db.add(row)
-            db.commit()
-
-        return ShareOut(
-            session_id=session_id,
-            is_public=True,
-            public_url=_public_session_url(session_id),
-        )
-
-    def revoke_share(
-        self,
-        session_id: str,
-        db: SQLSession = Depends(get_session),
-        current_user: str = Depends(require_current_user),
-    ) -> ShareOut:
-        """Flip this session back to private. Idempotent."""
-        row = db.exec(
-            select(SessionRow).where(SessionRow.id == session_id)
-        ).first()
-        if row is None or row.user != current_user:
-            raise HTTPException(status_code=404, detail="session not found")
-
-        if row.is_public:
-            print(
-                f"[share] session={session_id} user={current_user} "
-                f"transition=public->private"
-            )
-            row.is_public = False
-            db.add(row)
-            db.commit()
-
-        return ShareOut(
-            session_id=session_id,
-            is_public=False,
-            public_url=None,
         )
