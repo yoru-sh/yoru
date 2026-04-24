@@ -31,7 +31,6 @@ from sqlmodel import select
 
 import json
 
-from apps.api.api.core.ratelimit import limiter
 from apps.api.api.dependencies.auth import SESSION_COOKIE_NAME
 
 from .auth_sessions_model import AuthSession
@@ -191,24 +190,25 @@ class AuthRouter:
             status_code=status.HTTP_204_NO_CONTENT,
             response_model=None,
         )(self.revoke_token)
-        # Device-pair flow rate limits (issue #54). Keys default to remote IP
-        # via slowapi's get_remote_address; abuser on a compromised cookie can
-        # brute user_code but is capped at 10/min per source IP. Decorators
-        # are inert unless RATELIMIT_ENABLED is truthy — prod flips it on.
+        # Device-pair flow. Rate limits were attempted via slowapi decorators
+        # (issue #54 P1) but the wrapping broke FastAPI body introspection —
+        # endpoints started returning 422 "query: Field required" for valid
+        # POST bodies in prod. Reverted on 2026-04-24; will re-land via the
+        # path-prefix middleware pattern (RateLimitMiddleware) in a follow-up.
         self.router.post(
             "/device-code",
             response_model=DeviceCodeStartOut,
             status_code=status.HTTP_201_CREATED,
-        )(limiter.limit("20/minute")(self.device_code_start))
+        )(self.device_code_start)
         self.router.post(
             "/device-code/poll",
             response_model=DeviceCodePollOut,
-        )(limiter.limit("30/minute")(self.device_code_poll))
+        )(self.device_code_poll)
         self.router.post(
             "/device-code/approve",
             status_code=status.HTTP_204_NO_CONTENT,
             response_model=None,
-        )(limiter.limit("10/minute")(self.device_code_approve))
+        )(self.device_code_approve)
         self.router.post(
             "/service-token",
             response_model=ServiceTokenCreateOut,
