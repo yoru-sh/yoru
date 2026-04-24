@@ -122,6 +122,30 @@ class CliToken(SQLModel, table=True):
 HookToken = CliToken
 
 
+class DeviceAuthorizationToken(SQLModel, table=True):
+    """Transient store for the raw hook-token minted at /device-code/approve.
+
+    Lifetime: from approve (~T0) to first /poll reading an approved row
+    (~T0+2–10s). After that the row is deleted and only the sha256 persists
+    on `DeviceAuthorization.token_hash`.
+
+    Exists to replace the pre-beta `!`-sentinel pattern where the raw token
+    was transiently stored on the pairing row itself under the `token_hash`
+    column. Putting the raw value in a column *named* `token_hash` was
+    fragile — any tool that dumped that table assumed hashes, not plaintext.
+    A dedicated table makes the transience explicit and auditable.
+
+    Why not Redis: no Redis dependency in Receipt v0. Why not KMS: one extra
+    moving part for a ~10s window. A tiny SQLModel table + scheduled purge
+    is the smallest design that removes the footgun.
+    """
+    __tablename__ = "device_authorization_tokens"
+
+    device_code_hash: str = Field(primary_key=True)
+    raw_token: str
+    expires_at: datetime = Field(index=True)
+
+
 class DeviceAuthorization(SQLModel, table=True):
     """OAuth-2-style device-code pairing row (RFC 8628 simplified).
 

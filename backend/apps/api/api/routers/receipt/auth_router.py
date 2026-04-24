@@ -31,6 +31,7 @@ from sqlmodel import select
 
 import json
 
+from apps.api.api.core.ratelimit import limiter
 from apps.api.api.dependencies.auth import SESSION_COOKIE_NAME
 
 from .auth_sessions_model import AuthSession
@@ -40,6 +41,7 @@ from .email.welcome import send_welcome_email
 from .models import (
     CliToken,
     DeviceAuthorization,
+    DeviceAuthorizationToken,
     DeviceCodeApproveIn,
     DeviceCodePollIn,
     DeviceCodePollOut,
@@ -99,9 +101,18 @@ _DEV_JWT_SECRET = "dev-only-unsafe-change-me"
 
 _logger = logging.getLogger(__name__)
 
-# Warn once at import when the JWT secret is unset — tests and local dev fall
-# back to a known-unsafe constant. Prod MUST set AUTH_JWT_SECRET.
+# Fail fast in production if the JWT secret is missing. Tests and local dev
+# fall back to a known-unsafe constant so the suite stays runnable. The
+# silent-fallback path in prod was the risk flagged by the pre-beta audit
+# (issue #54): a misdeployed container would mint forgeable access JWTs
+# without a single log line the operator would notice.
 if not os.environ.get("AUTH_JWT_SECRET"):
+    _env = os.environ.get("ENVIRONMENT", "").strip().lower()
+    if _env in ("prod", "production"):
+        raise RuntimeError(
+            "AUTH_JWT_SECRET is unset in ENVIRONMENT=" + _env + ". Refusing to "
+            "boot with the dev-only fallback — set the secret and redeploy."
+        )
     _logger.warning(
         "AUTH_JWT_SECRET unset — access tokens will be signed with the "
         "dev-only fallback secret. Do NOT deploy this way."
@@ -180,20 +191,24 @@ class AuthRouter:
             status_code=status.HTTP_204_NO_CONTENT,
             response_model=None,
         )(self.revoke_token)
+        # Device-pair flow rate limits (issue #54). Keys default to remote IP
+        # via slowapi's get_remote_address; abuser on a compromised cookie can
+        # brute user_code but is capped at 10/min per source IP. Decorators
+        # are inert unless RATELIMIT_ENABLED is truthy — prod flips it on.
         self.router.post(
             "/device-code",
             response_model=DeviceCodeStartOut,
             status_code=status.HTTP_201_CREATED,
-        )(self.device_code_start)
+        )(limiter.limit("20/minute")(self.device_code_start))
         self.router.post(
             "/device-code/poll",
             response_model=DeviceCodePollOut,
-        )(self.device_code_poll)
+        )(limiter.limit("30/minute")(self.device_code_poll))
         self.router.post(
             "/device-code/approve",
             status_code=status.HTTP_204_NO_CONTENT,
             response_model=None,
-        )(self.device_code_approve)
+        )(limiter.limit("10/minute")(self.device_code_approve))
         self.router.post(
             "/service-token",
             response_model=ServiceTokenCreateOut,
@@ -324,6 +339,7 @@ class AuthRouter:
     def device_code_poll(
         self,
         body: DeviceCodePollIn,
+        request: Request,
         db: DBSession = Depends(get_session),
     ) -> DeviceCodePollOut:
         """CLI poll — unauth. Returns the minted hook-token the first time
@@ -355,31 +371,25 @@ class AuthRouter:
 
         if row.status == "approved":
             # Read-once: reveal the raw token, transition to consumed.
-            # The raw token was returned by /approve; we persist only a
-            # short-lived opaque blob alongside the row — but to keep the
-            # design stateless for the token itself, /approve stores the
-            # raw token on the row in `token_hash` column transiently via
-            # a separate one-shot field. Simplest: re-mint here on first
-            # poll-after-approve, binding to the captured user.
-            #
-            # Implementation: approve() saved the raw token into the
-            # in-memory consumable slot via a separate cache; since we have
-            # no Redis, we instead mint ON approve and stash the raw token
-            # on the row via a new column. To avoid a schema migration we
-            # use a convention: when status='approved', the `token_hash`
-            # column holds the *raw* token prefixed with '!' (never hashed
-            # that way elsewhere) — on first read we hash + overwrite.
-            raw = row.token_hash or ""
-            if raw.startswith("!"):
-                raw_token = raw[1:]
+            # The raw lives in the transient `device_authorization_tokens`
+            # table keyed by device_code_hash (written in /approve). First
+            # successful poll reads it, stamps the real sha256 on the
+            # pairing row, deletes the transient row, transitions to
+            # consumed. Later polls find no transient row → denied.
+            transient = db.get(DeviceAuthorizationToken, device_code_hash)
+            if transient is not None and transient.expires_at >= now:
+                raw_token = transient.raw_token
                 row.token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
                 row.status = "consumed"
                 row.consumed_at = now
+                db.delete(transient)
                 db.add(row)
                 db.commit()
                 return DeviceCodePollOut(status="approved", token=raw_token)
-            # Already consumed by an earlier poll — treat as denied so the
-            # CLI stops polling (it already got its token once).
+            # Transient expired or already consumed by an earlier poll —
+            # the CLI stops polling (it either got its token once, or the
+            # pairing rotted past TTL). Safer to report denied than to
+            # leak whether the raw ever existed.
             return DeviceCodePollOut(status="denied")
 
         # consumed / denied / expired
@@ -388,6 +398,7 @@ class AuthRouter:
     def device_code_approve(
         self,
         body: DeviceCodeApproveIn,
+        request: Request,
         db: DBSession = Depends(get_session),
         current_user: str = Depends(require_current_user),
     ) -> JSONResponse:
@@ -435,13 +446,20 @@ class AuthRouter:
         )
         db.add(hook_row)
 
-        # Stash raw on the pairing row with a '!' sentinel so the CLI poll
-        # can read it once, then hash+overwrite. See device_code_poll comment.
+        # The raw token is the CLI's one-time prize, read once on its next
+        # /poll. It lives in a dedicated transient table keyed by
+        # device_code_hash for that brief window (seconds), then deleted.
         # (Event scoping to orgs is resolved server-side via route_rules at
         # ingest time — the token itself has no scope.)
+        transient = DeviceAuthorizationToken(
+            device_code_hash=row.device_code_hash,
+            raw_token=raw_token,
+            expires_at=row.expires_at,
+        )
+        db.add(transient)
         row.status = "approved"
         row.user = current_user
-        row.token_hash = "!" + raw_token
+        row.token_hash = token_hash
         row.approved_at = now
         db.add(row)
         db.commit()

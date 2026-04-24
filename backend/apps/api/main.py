@@ -26,6 +26,7 @@ from apps.api.api.middlewares.metrics import (
     RequestMetricsMiddleware,
     render_prometheus,
 )
+from apps.api.api.core.ratelimit import limiter as _slowapi_limiter
 from apps.api.api.middlewares.rate_limit import RateLimitMiddleware
 from apps.api.api.routers.admin.groups.router import AdminGroupsRouter
 from apps.api.api.routers.admin.notifications_admin_router import NotificationAdminRouter
@@ -91,6 +92,17 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+# Wire slowapi's shared Limiter onto the app so per-route @limiter.limit(...)
+# decorators actually enforce (they read app.state.limiter). Gated by
+# RATELIMIT_ENABLED at the Limiter level, so flipping this on in code
+# is safe — existing test runs still see the decorators as no-ops until
+# the env var is set.
+from slowapi import _rate_limit_exceeded_handler  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
+
+app.state.limiter = _slowapi_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Security headers — innermost middleware (first add_middleware = last on
 # request, first on response). Stamps the 6-header bundle onto every response
