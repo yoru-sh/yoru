@@ -37,3 +37,10 @@ primary_region = "cdg"  # Paris — closest to Loic (Switzerland)
   size = "shared-cpu-1x"
   memory = "512mb"              # bump to 1gb when sessions > 1k/day
   cpus = 1
+
+# Fly scrapes this endpoint and exposes the series on the managed
+# Grafana at https://fly-metrics.nyc3.fly.dev. The app already serves
+# Prometheus text via RequestMetricsMiddleware + render_prometheus().
+[metrics]
+  port = 8002
+  path = "/metrics"
