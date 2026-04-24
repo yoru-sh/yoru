@@ -8,6 +8,14 @@ interface SessionHeroViewProps {
   isExporting?: boolean
   onGenerateSummary?: () => void
   isGeneratingSummary?: boolean
+  /** Issue #79 — share toggle. When provided, the hero renders a button
+   *  that flips `is_public` via the parent's handler. Public-page renders
+   *  of this component should not pass these props. */
+  onToggleShare?: () => void
+  isSharing?: boolean
+  /** Public URL for the session when `session.is_public` is true —
+   *  rendered as a copyable read-only field next to the toggle. */
+  publicShareUrl?: string | null
 }
 
 const RUBRIC = "font-mono text-caption uppercase tracking-wider text-ink-faint"
@@ -18,6 +26,9 @@ export function SessionHeroView({
   isExporting = false,
   onGenerateSummary,
   isGeneratingSummary = false,
+  onToggleShare,
+  isSharing = false,
+  publicShareUrl,
 }: SessionHeroViewProps) {
   const shortId = session.id.slice(0, 4)
   const summary = (session.summary ?? "").trim()
@@ -36,27 +47,62 @@ export function SessionHeroView({
           >
             {session.title ?? session.user_email}
           </h1>
-          {onExport && (
-            <div className="ml-auto shrink-0">
-              <button
-                type="button"
-                onClick={onExport}
-                disabled={isExporting}
-                title="Download full audit trail (JSON)"
-                className={
-                  "inline-flex items-center gap-1 rounded-sm border border-rule px-2 py-1 " +
-                  "font-mono text-caption uppercase tracking-wider text-ink-muted " +
-                  "hover:bg-sunken hover:text-ink " +
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 " +
-                  "focus-visible:ring-offset-2 focus-visible:ring-offset-paper " +
-                  "disabled:opacity-60"
-                }
-              >
-                {isExporting ? "…" : "↓ export trail"}
-              </button>
+          {(onExport || onToggleShare) && (
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              {onToggleShare && (
+                <button
+                  type="button"
+                  onClick={onToggleShare}
+                  disabled={isSharing}
+                  title={
+                    session.is_public
+                      ? "This session is public — click to revoke"
+                      : "Make this session publicly shareable"
+                  }
+                  aria-pressed={Boolean(session.is_public)}
+                  className={
+                    "inline-flex items-center gap-1 rounded-sm border px-2 py-1 " +
+                    "font-mono text-caption uppercase tracking-wider " +
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 " +
+                    "focus-visible:ring-offset-2 focus-visible:ring-offset-paper " +
+                    "disabled:opacity-60 " +
+                    (session.is_public
+                      ? "border-accent-500 bg-accent-500/10 text-accent-500 hover:bg-accent-500/15"
+                      : "border-rule text-ink-muted hover:bg-sunken hover:text-ink")
+                  }
+                >
+                  {isSharing ? "…" : session.is_public ? "● public" : "○ share"}
+                </button>
+              )}
+              {onExport && (
+                <button
+                  type="button"
+                  onClick={onExport}
+                  disabled={isExporting}
+                  title="Download full audit trail (JSON)"
+                  className={
+                    "inline-flex items-center gap-1 rounded-sm border border-rule px-2 py-1 " +
+                    "font-mono text-caption uppercase tracking-wider text-ink-muted " +
+                    "hover:bg-sunken hover:text-ink " +
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 " +
+                    "focus-visible:ring-offset-2 focus-visible:ring-offset-paper " +
+                    "disabled:opacity-60"
+                  }
+                >
+                  {isExporting ? "…" : "↓ export trail"}
+                </button>
+              )}
             </div>
           )}
         </div>
+        {session.is_public && publicShareUrl && (
+          <p className="mt-3 flex flex-wrap items-center gap-2 font-mono text-caption text-ink-muted">
+            <span className="text-ink-faint">public url:</span>
+            <code className="select-all rounded-sm bg-sunken px-1.5 py-0.5 text-ink">
+              {publicShareUrl}
+            </code>
+          </p>
+        )}
         <p className={`${RUBRIC} mt-2 flex flex-wrap items-baseline gap-x-2`}>
           <span className="font-mono normal-case tracking-normal text-ink-muted">
             {session.user_email}

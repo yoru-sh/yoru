@@ -28,6 +28,9 @@ export interface Session {
    *  to the user's personal workspace (or unknown if resolve_workspace
    *  couldn't reach Supabase). */
   workspace_id?: string | null
+  /** Opt-in public share flag (#79). True when POST /sessions/{id}/share
+   *  has flipped this session visible at /s/{id}. Defaults false. */
+  is_public?: boolean
 }
 
 export interface SessionEvent {

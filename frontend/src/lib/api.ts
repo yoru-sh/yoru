@@ -107,6 +107,7 @@ interface RawSession {
   flags: string[]
   title?: string | null
   workspace_id?: string | null
+  is_public?: boolean
 }
 
 // Backend rule_id (snake_case, per red_flags.py) → frontend RedFlagKind (kebab).
@@ -170,6 +171,7 @@ function mapSession(r: RawSession): import("../types/receipt").Session {
     flags,
     title: r.title ?? null,
     workspace_id: r.workspace_id ?? null,
+    is_public: Boolean(r.is_public),
   }
 }
 
@@ -362,6 +364,31 @@ export async function postSummary(id: string): Promise<Summary> {
 export async function getSummary(id: string): Promise<Summary> {
   if (USE_MOCKS) return mockGetSummary(id)
   return apiFetch<Summary>(`/sessions/${id}/summary`)
+}
+
+// ---- Issue #79 — share opt-in ----
+
+export interface ShareResponse {
+  session_id: string
+  is_public: boolean
+  public_url: string | null
+}
+
+/** Flip a session public. Idempotent server-side — re-POST returns the
+ *  same canonical URL. 404 on cross-user, 401 on unauth. */
+export async function shareSession(id: string): Promise<ShareResponse> {
+  return apiFetch<ShareResponse>(`/sessions/${encodeURIComponent(id)}/share`, {
+    method: "POST",
+    body: JSON.stringify({ source: "dashboard" }),
+  })
+}
+
+/** Flip a session back to private. Idempotent. */
+export async function revokeShareSession(id: string): Promise<ShareResponse> {
+  return apiFetch<ShareResponse>(
+    `/sessions/${encodeURIComponent(id)}/share/revoke`,
+    { method: "POST" },
+  )
 }
 
 // Billing — mirror of C1 backend shapes (BILLING-PLANS-V1.md §3).
