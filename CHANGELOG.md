@@ -5,6 +5,102 @@ The CLI (`yoru-cli`, MIT) is versioned and released separately.
 
 This project follows semantic versioning.
 
+## [0.4.0] - 2026-09-03
+
+Org-scoped identity and a CTO console. Every paired CLI is now a first-class
+identity that belongs to an org, the dashboard leads with exceptions instead of
+raw activity, and audit capture no longer depends on Claude Code's transcript
+file alone: git commits and pushes are captured and reconciled directly.
+
+Pairs with yoru-cli 0.3.0. A 0.2.x CLI still pairs and streams events; it just
+does not carry identity slots, git capture, or the tailer fixes, which live in
+the CLI.
+
+### Added
+
+- Identity keystone. The paired CLI token is the identity: approval records the
+  machine hostname, org admins list identities per org (`GET
+  /auth/org/identities`), and the dashboard shows both the org view and "My
+  machines" with hostname and last-seen, so a device that went quiet stands
+  out. (f96cace, 2434351, e53ad0d, 57c5a92)
+- Default org routing. An event that matches no workspace rule falls back to
+  the token's `default_org_id` workspace instead of landing in "Personal"; the
+  dashboard shows an explicit header while that fallback is in effect.
+  (d305f70, 352cfe8)
+- Token analytics. Day/week token and cost rollups at `GET /analytics/tokens`,
+  drillable by org, user, and repo. The Usage page is redesigned as an org-cost
+  console for the CTO persona. (4b7021c, 69a9659, 60be1ba, 85c5775)
+- Exceptions rollup. Org-wide red-flag BI: flagged sessions per period, top
+  rules, top offenders. `GET /activity` gains a `flagged` filter.
+  (fc05b56, 8c8718a)
+- Exception-first dashboard. `/` and `/feed` lead with flagged sessions by
+  default; the full activity stream is one click away. (c9d556b)
+- Session detail leads with the synthesis card; the heavy panels (cost,
+  integrity, causal replay, step-through replay, full timeline) collapse below
+  it. (668e796)
+- Skill-safety red flags. A deterministic 16-rule category (prompt injection,
+  reverse shells, exfiltration, hard-coded secrets, credential-path reads,
+  cloud-metadata probes) evaluated on events that touch skill content. No LLM,
+  not user-editable. (04810c7)
+- Custom red-flag rules show their org-defined name and severity as badges
+  across the dashboard, with follow-ups on the session hero.
+  (026685c, 60b6987)
+- Git capture (B3). The CLI installs opt-in `post-commit`/`pre-push` hooks and
+  reconciles `git log` every 60s so `--no-verify` and pre-init commits still
+  land. The backend ingests commit and force-push events under a stable session
+  id, and session detail shows an audit badge with `agent_confidence`
+  (declared/unknown) and whether enforcement is available.
+  (e050c8d, a238b6e, b62cbcd, db18309, 631ee94)
+- Canonical event. Red-flag scanning runs on a provider-neutral
+  `CanonicalEvent` instead of Claude Code's raw event shape, so events from
+  other agents get the same rules. (e31f64a)
+- Shared wire contract package `packages/yoru-contract` (MIT) for the
+  device-code pairing DTOs used by both the CLI and the backend. (7bdb49d)
+- Pairing page distinguishes invalid, expired, and already-paired codes.
+  (283a717)
+- Frontend test harness (vitest + Testing Library) and a hermetic Playwright
+  screenshot suite. (852790e, 14e1e7e)
+- Authz primitives documented: `require_org_admin` gates org-wide actions,
+  `visible_scope_sync` decides which rows a caller sees. (3d4e97f)
+
+### Fixed
+
+- Org selection stays in sync across browser tabs. (082e791)
+- Organizations page no longer crashes when the API returns a non-array
+  `items`. (ae29126, 18c1fb1)
+- Marketing hero no longer overflows on mobile. (6e6b20a)
+
+### CI
+
+- `skill-gate` review-verdict check uses a general left-anchored regex with a
+  pinned selftest, so domain-scoped review skills pass. (1140bef)
+
+### CLI (yoru-cli 0.3.0, released alongside)
+
+The CLI is versioned separately; these landed in this repo over the same
+window and ship as `yoru-cli` 0.3.0.
+
+- Identity slots. Local state (`config.json`, `tail-state.json`,
+  `enforce.json`) is scoped per paired identity instead of per `$HOME`, so two
+  devs on one machine, or one dev re-pairing, no longer overwrite each other.
+  (73c5f3f)
+- `yoru doctor` prints the active identity and warns when several slots exist.
+  (813e2ab)
+- `yoru logout` and token rotation without a full re-pair. (9cb68fd)
+- `yoru init --force` revokes the previous token server-side instead of only
+  overwriting the local file. (527d6d9)
+- Git capture: `yoru init` offers opt-in `post-commit`/`pre-push` hooks for
+  that repo, plus a 60s `git log` reconcile that backfills commits made with
+  `--no-verify` or before init; hook and reconcile paths produce the same
+  session id and entry uuid. Hostname is sent at pairing.
+  (e050c8d, a238b6e, b62cbcd, f1fbf9d, f96cace)
+- Force-push events carry their kind. (db18309)
+- Transcript tailer: `tail-state.json` guarded by `flock` (run lock + state
+  lock) so two tailers cannot clobber each other (832c4f9); `yoru status` no
+  longer truncates the run-lock file while probing it (d7e6f2f); drains stream
+  the unread remainder instead of one whole-file read (bfa86a0); backfill no
+  longer races the running tailer's in-memory state (307778e).
+
 ## [0.2.0] - 2026-06-27
 
 Local-export sharing. Turn any session into a shareable image rendered on your
